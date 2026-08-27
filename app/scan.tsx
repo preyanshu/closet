@@ -1,7 +1,7 @@
 import { useHeaderHeight } from "@react-navigation/elements";
 import { Button } from "@/components/ui";
 import { categoryLabels, type ClothingCategory } from "@/data/mock";
-import { removeBackground } from "@/services/background-removal";
+import { stageGarment } from "@/services/garment-staging";
 import { useCloset } from "@/state/closet-context";
 import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -71,13 +71,13 @@ export default function ScanModal() {
     setAnalyzing(true);
     setError(null);
     try {
-      const { cleanUri } = await removeBackground(uri);
+      const { cleanUri } = await stageGarment(uri);
       setPendingItems(mockDetectedItems.map((item) => ({ ...item, cleanUri })));
       setIncludedIds(new Set(mockDetectedItems.map((item) => item.id)));
       setMode("results");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e: any) {
-      setError(e?.message ?? "Background removal failed");
+      setError(e?.message ?? "Could not create product photo.");
       setPendingItems(mockDetectedItems.map((item) => ({ ...item, cleanUri: uri })));
       setIncludedIds(new Set(mockDetectedItems.map((item) => item.id)));
       setMode("results");
@@ -173,7 +173,7 @@ export default function ScanModal() {
             {analyzing ? (
               <View style={{ position: "absolute", inset: 0, backgroundColor: "rgba(0,0,0,0.6)", alignItems: "center", justifyContent: "center", gap: 10 }}>
                 <ActivityIndicator color="#FFFDF3" size="large" />
-                <Text style={{ fontSize: 15, fontWeight: "700", color: "#FFFDF3" }}>Removing background…</Text>
+                <Text style={{ fontSize: 15, fontWeight: "700", color: "#FFFDF3" }}>Creating product photo…</Text>
               </View>
             ) : null}
           </View>
@@ -202,7 +202,7 @@ export default function ScanModal() {
                 {pendingItems.length} {pendingItems.length === 1 ? "piece" : "pieces"} found
               </Text>
               <Text style={{ fontSize: 13, fontWeight: "600", color: error ? "#D32F2F" : "rgba(0,0,0,0.45)" }}>
-                {error ? "Background removal failed. Using original photo." : "Tap an item to review its details."}
+                {error ? "Could not create a clean photo. Using original photo." : "Tap an item to review its details."}
               </Text>
             </View>
           </View>
