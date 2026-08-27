@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "Wardrobe",
+    "slug": "wardrobe-app-mvp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "wardrobe",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Wardrobe to select a photo to mock-add clothing items."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Wardrobe to use the camera to scan and add your clothes."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

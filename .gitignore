@@ -1,0 +1,39 @@
+# Secrets
+*.env
+.env*
+
+# Dependencies
+node_modules/
+
+# Expo / build
+.expo/
+dist/
+web-build/
+*.tsbuildinfo
+expo-env.d.ts
+
+# Agent/tooling config (local)
+.agents/
+.codex/
+.playwright-mcp/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Test / intermediate images and outputs (garbage)
+output_final/
+image*.png
+image copy*.png
+item_*.png
+crop_*.png
+segment_*.png
+output_*.png
+output_*.png_items/
+output_*_items/
+output_grid.png
+output_multi/
+image-clean.png
+image-final*.png
