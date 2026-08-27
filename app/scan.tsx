@@ -2,6 +2,7 @@ import { useHeaderHeight } from "@react-navigation/elements";
 import { Button } from "@/components/ui";
 import { categoryLabels, type ClothingCategory } from "@/data/mock";
 import { stageGarment } from "@/services/garment-staging";
+import { detectGarment, suggestAesthetics } from "@/services/garment-detect";
 import { useCloset } from "@/state/closet-context";
 import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -71,9 +72,18 @@ export default function ScanModal() {
     setAnalyzing(true);
     setError(null);
     try {
-      const { cleanUri } = await stageGarment(uri);
-      setPendingItems(mockDetectedItems.map((item) => ({ ...item, cleanUri })));
-      setIncludedIds(new Set(mockDetectedItems.map((item) => item.id)));
+      const [staged, detected] = await Promise.all([stageGarment(uri), detectGarment(uri)]);
+      const item: PendingItem = {
+        id: `detect-${Date.now()}`,
+        name: detected.name,
+        category: detected.category,
+        color: detected.primary_color,
+        price: 0,
+        aesthetics: suggestAesthetics(detected),
+        cleanUri: staged.cleanUri,
+      };
+      setPendingItems([item]);
+      setIncludedIds(new Set([item.id]));
       setMode("results");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e: any) {
