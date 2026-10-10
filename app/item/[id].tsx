@@ -5,7 +5,11 @@ import { ScrollView, Text, View } from "react-native";
 import { useCloset } from "@/state/closet-context";
 import { categoryLabels } from "@/data/mock";
 import { formatPrice, priceToNumber } from "@/types/domain";
+import { availabilityLabels, lifecycleLabels, processingLabels, roleLabels, warmthLabels } from "@/types/taxonomy";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+type SymbolName = React.ComponentProps<typeof SymbolView>["name"];
+type DetailRow = { icon: SymbolName; label: string; value: string };
 
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -22,6 +26,37 @@ export default function ItemDetailScreen() {
   }
 
   const fav = isFavorite(item.id);
+  const price = priceToNumber(item);
+  const costPerWear = price != null && item.wearCount > 0 ? `$${(price / item.wearCount).toFixed(2)}` : "—";
+
+  const detailRows: DetailRow[] = [
+    { icon: "dollarsign.circle", label: "Price", value: formatPrice(item) },
+    { icon: "tag", label: "Category", value: `${categoryLabels[item.category]} · ${item.subcategory}` },
+    { icon: "paintpalette", label: "Color", value: [item.primaryColor, ...item.secondaryColors].join(", ") },
+    { icon: "bag", label: "Brand", value: item.brand ?? "Unknown" },
+  ];
+
+  const fabricRows: DetailRow[] = [
+    { icon: "square.stack.3d.up", label: "Role", value: roleLabels[item.role] },
+    { icon: "ruler", label: "Fit", value: item.fit ?? "—" },
+    { icon: "tshirt", label: "Sleeve", value: item.sleeveLength ?? "N/A" },
+    { icon: "scribble", label: "Pattern", value: item.pattern ?? "—" },
+    { icon: "paintbrush", label: "Texture", value: item.visibleTexture ?? "—" },
+    { icon: "thermometer.medium", label: "Warmth", value: item.warmthBand ? warmthLabels[item.warmthBand] : "—" },
+    { icon: "sparkles", label: "Formality", value: item.formality ?? "—" },
+  ];
+
+  const statusRows: DetailRow[] = [
+    { icon: "tray.full", label: "Availability", value: availabilityLabels[item.availabilityStatus] },
+    { icon: "archivebox", label: "Lifecycle", value: lifecycleLabels[item.lifecycleStatus] },
+    { icon: "hourglass", label: "Processing", value: processingLabels[item.processingStatus] },
+  ];
+
+  const wearRows: DetailRow[] = [
+    { icon: "clock", label: "Worn", value: item.wearCount > 0 ? `${item.wearCount} times` : "Never" },
+    { icon: "chart.line.downtrend.xyaxis", label: "Cost per wear", value: costPerWear },
+    { icon: "clock", label: "Last worn", value: item.lastWorn ?? "Never" },
+  ];
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: adaptiveColors.canvas }} contentInsetAdjustmentBehavior="automatic">
@@ -54,29 +89,29 @@ export default function ItemDetailScreen() {
           </View>
           </View> : null}
 
-          <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
-          <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>Piece details</Text>
-          <View style={{ borderRadius: radius.lg, backgroundColor: adaptiveColors.surface, borderWidth: 1, borderColor: adaptiveColors.border, paddingHorizontal: spacing.md }}>
-            <InfoRow icon="dollarsign.circle" label="Price" value={formatPrice(item)} />
-            <InfoRow icon="tag" label="Category" value={categoryLabels[item.category]} />
-            <InfoRow icon="paintpalette" label="Color" value={item.primaryColor} last />
-          </View>
-          </View>
-          <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
-          <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>Wear history</Text>
-          <View style={{ borderRadius: radius.lg, backgroundColor: adaptiveColors.surface, borderWidth: 1, borderColor: adaptiveColors.border, paddingHorizontal: spacing.md }}>
-            <InfoRow icon="clock" label="Worn" value={item.wearCount > 0 ? `${item.wearCount} times` : "Never"} />
-            <InfoRow icon="chart.line.downtrend.xyaxis" label="Cost per wear" value={(() => { const price = priceToNumber(item); return price != null && item.wearCount > 0 ? `$${(price / item.wearCount).toFixed(2)}` : "—"; })()} />
-            <InfoRow icon="clock" label="Last worn" value={item.lastWorn ?? "Never"} last />
-          </View>
-          </View>
+          <DetailSection title="Piece details" rows={detailRows} />
+          <DetailSection title="Fabric & fit" rows={fabricRows} />
+          <DetailSection title="Status" rows={statusRows} />
+          <DetailSection title="Wear history" rows={wearRows} />
         </View>
       </View>
     </ScrollView>
   );
 }
 
-function InfoRow({ icon, label, value, last = false }: { icon: React.ComponentProps<typeof SymbolView>["name"]; label: string; value: string; last?: boolean }) {
+function DetailSection({ title, rows }: { title: string; rows: DetailRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
+      <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>{title}</Text>
+      <View style={{ borderRadius: radius.lg, backgroundColor: adaptiveColors.surface, borderWidth: 1, borderColor: adaptiveColors.border, paddingHorizontal: spacing.md }}>
+        {rows.map((row, index) => <InfoRow key={row.label} {...row} last={index === rows.length - 1} />)}
+      </View>
+    </View>
+  );
+}
+
+function InfoRow({ icon, label, value, last = false }: { icon: SymbolName; label: string; value: string; last?: boolean }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", minHeight: 54, paddingVertical: spacing.md, borderBottomWidth: last ? 0 : 1, borderBottomColor: adaptiveColors.separator, gap: spacing.sm }}>
       <WardrobeIcon name={icon} color={adaptiveColors.tertiaryLabel} size={18} />

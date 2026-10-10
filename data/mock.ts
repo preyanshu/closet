@@ -27,17 +27,17 @@ function seedItem(input: {
   name: string;
   category: ClothingCategory;
   role: ItemRole;
-  subcategory?: string;
+  subcategory: string;
   primaryColor: string;
-  secondaryColors?: string[];
+  secondaryColors: string[];
   styleTags: string[];
-  pattern?: string;
+  pattern: string;
   sleeveLength?: string;
   fit?: string;
-  visibleTexture?: string;
-  formality?: string;
-  warmthBand?: WarmthBand;
-  brand?: string;
+  visibleTexture: string;
+  formality: string;
+  warmthBand: WarmthBand;
+  brand: string;
   imageUrl: string;
   lastWorn: string | null;
   price: number;
@@ -52,7 +52,7 @@ function seedItem(input: {
     subcategory: input.subcategory,
     role: input.role,
     primaryColor: input.primaryColor,
-    secondaryColors: input.secondaryColors ?? [],
+    secondaryColors: input.secondaryColors,
     styleTags: input.styleTags,
     pattern: input.pattern,
     sleeveLength: input.sleeveLength,
@@ -235,22 +235,22 @@ export const aesthetics: Aesthetic[] = [
 ];
 
 export const clothingItems: Item[] = [
-  seedItem({ id: "item-01", name: "Ribbed white tank", category: "top", role: "base_top", subcategory: "Tank", primaryColor: "white", styleTags: ["clean-girl", "minimal"], visibleTexture: "ribbed", formality: "casual", warmthBand: "light", imageUrl: "@/assets/item-1.png", lastWorn: "2026-07-18", price: 28, wearCount: 12 }),
-  seedItem({ id: "item-02", name: "Black silk blouse", category: "top", role: "base_top", subcategory: "Blouse", primaryColor: "black", styleTags: ["office", "evening", "minimal"], sleeveLength: "long", visibleTexture: "satin", formality: "formal", warmthBand: "light", imageUrl: "@/assets/item-2.png", lastWorn: "2026-07-11", price: 89, wearCount: 9 }),
-  seedItem({ id: "item-03", name: "Cream knit polo", category: "top", role: "base_top", subcategory: "Polo", primaryColor: "cream", styleTags: ["old-money", "minimal"], sleeveLength: "short", formality: "smart-casual", warmthBand: "medium", imageUrl: "@/assets/item-3.png", lastWorn: null, price: 59, wearCount: 0 }),
-  seedItem({ id: "item-04", name: "Tailored charcoal trouser", category: "bottom", role: "bottom", subcategory: "Dress pants", primaryColor: "charcoal", styleTags: ["office", "old-money", "minimal"], fit: "tailored", formality: "formal", warmthBand: "medium", imageUrl: "@/assets/item-4.png", lastWorn: "2026-07-20", price: 120, wearCount: 11 }),
-  seedItem({ id: "item-05", name: "Straight blue denim", category: "bottom", role: "bottom", subcategory: "Jeans", primaryColor: "blue", styleTags: ["clean-girl", "streetwear"], fit: "straight", formality: "casual", warmthBand: "medium", imageUrl: "@/assets/item-1.png", lastWorn: "2026-07-13", price: 78, wearCount: 10 }),
-  seedItem({ id: "item-06", name: "Black pleated skirt", category: "bottom", role: "bottom", subcategory: "Skirt", primaryColor: "black", styleTags: ["office", "evening"], visibleTexture: "pleated", formality: "smart-casual", warmthBand: "light", imageUrl: "@/assets/item-2.png", lastWorn: null, price: 65, wearCount: 0 }),
-  seedItem({ id: "item-07", name: "Camel wool coat", category: "outerwear", role: "outer_layer", subcategory: "Coat", primaryColor: "camel", styleTags: ["old-money", "office"], visibleTexture: "wool", formality: "formal", warmthBand: "heavy", brand: "Everlane", imageUrl: "@/assets/item-3.png", lastWorn: "2026-07-05", price: 240, wearCount: 6 }),
-  seedItem({ id: "item-08", name: "Cropped leather jacket", category: "outerwear", role: "outer_layer", subcategory: "Jacket", primaryColor: "black", styleTags: ["streetwear", "evening"], visibleTexture: "leather", formality: "smart-casual", warmthBand: "heavy", imageUrl: "@/assets/item-4.png", lastWorn: "2026-07-16", price: 180, wearCount: 4 }),
-  seedItem({ id: "item-09", name: "Ivory cardigan", category: "outerwear", role: "mid_layer", subcategory: "Cardigan", primaryColor: "ivory", styleTags: ["clean-girl", "old-money"], sleeveLength: "long", formality: "casual", warmthBand: "medium", imageUrl: "@/assets/item-1.png", lastWorn: null, price: 52, wearCount: 0 }),
-  seedItem({ id: "item-10", name: "White leather sneaker", category: "shoes", role: "footwear", subcategory: "Sneakers", primaryColor: "white", styleTags: ["clean-girl", "streetwear", "minimal"], pattern: "solid", formality: "casual", warmthBand: "light", brand: "Veja", imageUrl: "@/assets/item-2.png", lastWorn: "2026-07-21", price: 95, wearCount: 14 }),
-  seedItem({ id: "item-11", name: "Black pointed mule", category: "shoes", role: "footwear", subcategory: "Heels", primaryColor: "black", styleTags: ["office", "evening", "minimal"], formality: "formal", warmthBand: "light", imageUrl: "@/assets/item-3.png", lastWorn: "2026-07-08", price: 110, wearCount: 7 }),
-  seedItem({ id: "item-12", name: "Brown loafer", category: "shoes", role: "footwear", subcategory: "Loafers", primaryColor: "brown", styleTags: ["old-money", "office"], formality: "smart-casual", warmthBand: "medium", imageUrl: "@/assets/item-4.png", lastWorn: null, price: 85, wearCount: 0 }),
-  seedItem({ id: "item-13", name: "Slim black belt", category: "accessory", role: "belt", subcategory: "Belt", primaryColor: "black", styleTags: ["office", "minimal", "old-money"], formality: "smart-casual", warmthBand: "light", imageUrl: "@/assets/item-1.png", lastWorn: "2026-07-19", price: 30, wearCount: 8 }),
-  seedItem({ id: "item-14", name: "Pearl studs", category: "accessory", role: "jewelry", subcategory: "Jewelry", primaryColor: "white", secondaryColors: ["gold"], styleTags: ["old-money", "clean-girl", "evening"], formality: "formal", warmthBand: "light", imageUrl: "@/assets/item-2.png", lastWorn: null, price: 45, wearCount: 0 }),
-  seedItem({ id: "item-15", name: "Nylon shoulder bag", category: "accessory", role: "bag", subcategory: "Bag", primaryColor: "black", styleTags: ["streetwear", "minimal"], visibleTexture: "nylon", formality: "casual", warmthBand: "light", imageUrl: "@/assets/item-3.png", lastWorn: "2026-07-09", price: 68, wearCount: 5 }),
-  seedItem({ id: "item-16", name: "Oversized hoodie", category: "top", role: "base_top", subcategory: "Hoodie", primaryColor: "gray", styleTags: ["streetwear"], fit: "oversized", formality: "casual", warmthBand: "heavy", imageUrl: "@/assets/item-4.png", lastWorn: "2026-07-22", price: 42, wearCount: 9 }),
-  seedItem({ id: "item-17", name: "Satin slip dress", category: "bottom", role: "one_piece", subcategory: "Dress", primaryColor: "black", styleTags: ["evening", "minimal"], visibleTexture: "satin", formality: "formal", warmthBand: "light", imageUrl: "@/assets/item-1.png", lastWorn: null, price: 75, wearCount: 0 }),
-  seedItem({ id: "item-18", name: "Boxy white shirt", category: "top", role: "base_top", subcategory: "Button-down", primaryColor: "white", styleTags: ["office", "clean-girl", "old-money"], sleeveLength: "long", fit: "boxy", formality: "smart-casual", warmthBand: "light", imageUrl: "@/assets/item-2.png", lastWorn: "2026-07-15", price: 48, wearCount: 10 })
+  seedItem({ id: "item-01", name: "Ribbed white tank", category: "top", role: "base_top", subcategory: "Tank", primaryColor: "white", secondaryColors: [], styleTags: ["clean-girl", "minimal"], pattern: "solid", sleeveLength: "sleeveless", fit: "fitted", visibleTexture: "ribbed cotton", formality: "casual", warmthBand: "light", brand: "COS", imageUrl: "@/assets/item-1.png", lastWorn: "2026-07-18", price: 28, wearCount: 12 }),
+  seedItem({ id: "item-02", name: "Black silk blouse", category: "top", role: "base_top", subcategory: "Blouse", primaryColor: "black", secondaryColors: ["charcoal"], styleTags: ["office", "evening", "minimal"], pattern: "solid", sleeveLength: "long", fit: "relaxed", visibleTexture: "satin", formality: "formal", warmthBand: "light", brand: "Everlane", imageUrl: "@/assets/item-2.png", lastWorn: "2026-07-11", price: 89, wearCount: 9 }),
+  seedItem({ id: "item-03", name: "Cream knit polo", category: "top", role: "base_top", subcategory: "Polo", primaryColor: "cream", secondaryColors: [], styleTags: ["old-money", "minimal"], pattern: "solid", sleeveLength: "short", fit: "regular", visibleTexture: "knit", formality: "smart-casual", warmthBand: "medium", brand: "Uniqlo", imageUrl: "@/assets/item-3.png", lastWorn: null, price: 59, wearCount: 0 }),
+  seedItem({ id: "item-04", name: "Tailored charcoal trouser", category: "bottom", role: "bottom", subcategory: "Dress pants", primaryColor: "charcoal", secondaryColors: [], styleTags: ["office", "old-money", "minimal"], pattern: "solid", fit: "tailored", visibleTexture: "worsted wool", formality: "formal", warmthBand: "medium", brand: "Theory", imageUrl: "@/assets/item-4.png", lastWorn: "2026-07-20", price: 120, wearCount: 11 }),
+  seedItem({ id: "item-05", name: "Straight blue denim", category: "bottom", role: "bottom", subcategory: "Jeans", primaryColor: "blue", secondaryColors: [], styleTags: ["clean-girl", "streetwear"], pattern: "solid", fit: "straight", visibleTexture: "denim", formality: "casual", warmthBand: "medium", brand: "Levi's", imageUrl: "@/assets/item-1.png", lastWorn: "2026-07-13", price: 78, wearCount: 10 }),
+  seedItem({ id: "item-06", name: "Black pleated skirt", category: "bottom", role: "bottom", subcategory: "Skirt", primaryColor: "black", secondaryColors: [], styleTags: ["office", "evening"], pattern: "solid", fit: "a-line", visibleTexture: "pleated", formality: "smart-casual", warmthBand: "light", brand: "Zara", imageUrl: "@/assets/item-2.png", lastWorn: null, price: 65, wearCount: 0 }),
+  seedItem({ id: "item-07", name: "Camel wool coat", category: "outerwear", role: "outer_layer", subcategory: "Coat", primaryColor: "camel", secondaryColors: ["brown"], styleTags: ["old-money", "office"], pattern: "solid", sleeveLength: "long", fit: "tailored", visibleTexture: "wool", formality: "formal", warmthBand: "heavy", brand: "Everlane", imageUrl: "@/assets/item-3.png", lastWorn: "2026-07-05", price: 240, wearCount: 6 }),
+  seedItem({ id: "item-08", name: "Cropped leather jacket", category: "outerwear", role: "outer_layer", subcategory: "Jacket", primaryColor: "black", secondaryColors: ["gunmetal"], styleTags: ["streetwear", "evening"], pattern: "solid", sleeveLength: "long", fit: "cropped", visibleTexture: "leather", formality: "smart-casual", warmthBand: "heavy", brand: "AllSaints", imageUrl: "@/assets/item-4.png", lastWorn: "2026-07-16", price: 180, wearCount: 4 }),
+  seedItem({ id: "item-09", name: "Ivory cardigan", category: "outerwear", role: "mid_layer", subcategory: "Cardigan", primaryColor: "ivory", secondaryColors: [], styleTags: ["clean-girl", "old-money"], pattern: "solid", sleeveLength: "long", fit: "relaxed", visibleTexture: "knit", formality: "casual", warmthBand: "medium", brand: "& Other Stories", imageUrl: "@/assets/item-1.png", lastWorn: null, price: 52, wearCount: 0 }),
+  seedItem({ id: "item-10", name: "White leather sneaker", category: "shoes", role: "footwear", subcategory: "Sneakers", primaryColor: "white", secondaryColors: ["cream"], styleTags: ["clean-girl", "streetwear", "minimal"], pattern: "solid", visibleTexture: "leather", formality: "casual", warmthBand: "light", brand: "Veja", imageUrl: "@/assets/item-2.png", lastWorn: "2026-07-21", price: 95, wearCount: 14 }),
+  seedItem({ id: "item-11", name: "Black pointed mule", category: "shoes", role: "footwear", subcategory: "Heels", primaryColor: "black", secondaryColors: [], styleTags: ["office", "evening", "minimal"], pattern: "solid", visibleTexture: "patent leather", formality: "formal", warmthBand: "light", brand: "Sam Edelman", imageUrl: "@/assets/item-3.png", lastWorn: "2026-07-08", price: 110, wearCount: 7 }),
+  seedItem({ id: "item-12", name: "Brown loafer", category: "shoes", role: "footwear", subcategory: "Loafers", primaryColor: "brown", secondaryColors: ["cognac"], styleTags: ["old-money", "office"], pattern: "solid", visibleTexture: "leather", formality: "smart-casual", warmthBand: "medium", brand: "G.H. Bass", imageUrl: "@/assets/item-4.png", lastWorn: null, price: 85, wearCount: 0 }),
+  seedItem({ id: "item-13", name: "Slim black belt", category: "accessory", role: "belt", subcategory: "Belt", primaryColor: "black", secondaryColors: ["gold"], styleTags: ["office", "minimal", "old-money"], pattern: "solid", visibleTexture: "leather", formality: "smart-casual", warmthBand: "light", brand: "Madewell", imageUrl: "@/assets/item-1.png", lastWorn: "2026-07-19", price: 30, wearCount: 8 }),
+  seedItem({ id: "item-14", name: "Pearl studs", category: "accessory", role: "jewelry", subcategory: "Jewelry", primaryColor: "white", secondaryColors: ["gold"], styleTags: ["old-money", "clean-girl", "evening"], pattern: "solid", visibleTexture: "pearl", formality: "formal", warmthBand: "light", brand: "Mejuri", imageUrl: "@/assets/item-2.png", lastWorn: null, price: 45, wearCount: 0 }),
+  seedItem({ id: "item-15", name: "Nylon shoulder bag", category: "accessory", role: "bag", subcategory: "Bag", primaryColor: "black", secondaryColors: ["silver"], styleTags: ["streetwear", "minimal"], pattern: "solid", visibleTexture: "nylon", formality: "casual", warmthBand: "light", brand: "Baggu", imageUrl: "@/assets/item-3.png", lastWorn: "2026-07-09", price: 68, wearCount: 5 }),
+  seedItem({ id: "item-16", name: "Oversized hoodie", category: "top", role: "base_top", subcategory: "Hoodie", primaryColor: "gray", secondaryColors: [], styleTags: ["streetwear"], pattern: "solid", sleeveLength: "long", fit: "oversized", visibleTexture: "fleece", formality: "casual", warmthBand: "heavy", brand: "Champion", imageUrl: "@/assets/item-4.png", lastWorn: "2026-07-22", price: 42, wearCount: 9 }),
+  seedItem({ id: "item-17", name: "Satin slip dress", category: "bottom", role: "one_piece", subcategory: "Dress", primaryColor: "black", secondaryColors: ["charcoal"], styleTags: ["evening", "minimal"], pattern: "solid", visibleTexture: "satin", formality: "formal", warmthBand: "light", brand: "Reformation", imageUrl: "@/assets/item-1.png", lastWorn: null, price: 75, wearCount: 0 }),
+  seedItem({ id: "item-18", name: "Boxy white shirt", category: "top", role: "base_top", subcategory: "Button-down", primaryColor: "white", secondaryColors: [], styleTags: ["office", "clean-girl", "old-money"], pattern: "solid", sleeveLength: "long", fit: "boxy", visibleTexture: "poplin", formality: "smart-casual", warmthBand: "light", brand: "Uniqlo", imageUrl: "@/assets/item-2.png", lastWorn: "2026-07-15", price: 48, wearCount: 10 })
 ];

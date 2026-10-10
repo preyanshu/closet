@@ -5,8 +5,8 @@ Decisions locked for PR1 of the wardrobe architecture migration
 
 ## Scope
 Introduce the durable domain model the backend repository and recommendation engine will
-later write/read. Screens still render from in-memory state seeded by `data/mock.ts`, but
-every consumer now speaks the canonical `Item`/`Outfit` vocabulary.
+later write/read. Every PR ships its **consumer UI** alongside the data/logic change — no
+PR lands a model or service change without the screens that present it (see UI parity rule).
 
 ## Domain types (`types/domain.ts`)
 - `Item` replaces the old `ClothingItem`:
@@ -29,14 +29,20 @@ every consumer now speaks the canonical `Item`/`Outfit` vocabulary.
 - Same 18 item ids and 7 demo album ids; image asset paths unchanged (`@/assets/item-1..4.png`).
 - Mock albums set `source: "demo"`, `metadata.demo: true`, `currentRevisionId`, and an example `items[]` composition anchored to the old item ids.
 
-## Behavior contracts kept identical for seeded data
-- Closet/home/outfits/plan/style/item-detail/look-detail render exactly as before.
-- Item detail "Vibes" reads `styleTags`, color reads `primaryColor`, price shows `—` when unknown.
+## Behavior contracts
+- Closet/home/outfits/plan/style/look-detail render as before.
+- **Item detail** surfaces the new model: Piece details (price, category · subcategory, color + accents, brand), Fabric & fit (role, fit, sleeve, pattern, texture, warmth, formality), Status (availability, lifecycle, processing), and Wear history. Rows whose value is genuinely N/A (e.g. sleeve length on shoes) show `N/A`; unknown price shows `—`.
 - Scan and manual add construct full `Item`s:
   - `originalAssetUri` = camera/library photo, `displayAssetUri` = staged version (or original when staging was skipped).
   - Blank price ⇒ `priceMinor: null` (unknown, shown as `—`); a valid amount is stored in cents.
   - `role` = `defaultRoleForCategory(category)`.
 - Analytics total/avg/donut exclude items with unknown price; a caption notes how many are unknown.
+
+## UI parity rule (applies to every PR)
+Every change to the domain model, storage, or services must ship the corresponding UI in the
+same PR — including empty/partial states for values not yet populated by the pipeline. No
+"model now, UI later." Seed/mock data must keep its new fields populated so screens never
+render blank rows for the demo wardrobe.
 
 ## Deleted (confirmed dead)
 - `services/outfit-avatar.ts`, `services/background-removal.ts`, `components/garment-art.tsx`.
