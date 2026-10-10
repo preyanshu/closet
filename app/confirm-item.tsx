@@ -7,6 +7,7 @@ import { router } from "expo-router";
 import { useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, Text, View } from "react-native";
 import { type ClothingCategory } from "@/data/mock";
+import { defaultRoleForCategory } from "@/types/taxonomy";
 
 const categories: ClothingCategory[] = ["top", "bottom", "outerwear", "shoes", "accessory"];
 const categoryShortLabels: Record<ClothingCategory, string> = {
@@ -48,14 +49,25 @@ export default function ConfirmItemScreen() {
   const save = () => {
     addItem({
       id: `scan-${Date.now()}`,
+      ownerId: "local-demo",
       name,
       category,
-      color,
-      aesthetics: selectedAesthetics,
-      imageUrl: pickedImage ?? "mock://scanned",
-      lastWorn: null,
-      price: Math.max(0, parseFloat(price) || 0),
+      role: defaultRoleForCategory(category),
+      primaryColor: color.toLowerCase(),
+      secondaryColors: [],
+      styleTags: selectedAesthetics,
+      originalAssetUri: pickedImage ?? "mock://scanned",
+      displayAssetUri: pickedImage ?? "mock://scanned",
+      priceMinor: price.trim() === "" ? null : Math.round(Math.max(0, parseFloat(price)) * 100),
+      priceCurrency: "USD",
       wearCount: 0,
+      lastWorn: null,
+      availabilityStatus: "available",
+      lifecycleStatus: "owned",
+      processingStatus: "ready",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      revision: 1,
     });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     router.dismiss();

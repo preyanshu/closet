@@ -1,5 +1,5 @@
 import { adaptiveColors, Card, GlassButton, GlassLayer, ItemImage, NativePicker, Screen, WardrobeIcon } from "@/components/ui";
-import { type ClothingItem, type Outfit } from "@/data/mock";
+import { type Item, type Outfit } from "@/data/mock";
 import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
 import * as Haptics from "expo-haptics";
@@ -53,7 +53,7 @@ export default function HomeScreen() {
         {outfits.map((outfit, index) => {
           const outfitItems = outfit.itemIds
             .map((id) => items.find((item) => item.id === id))
-            .filter((item): item is ClothingItem => Boolean(item));
+            .filter((item): item is Item => Boolean(item));
           const mode = viewModes[outfit.id] ?? "look";
           const meta = outfitMeta[index] ?? { title: outfit.label, occasion: "Curated" };
 
@@ -155,11 +155,11 @@ function SegmentedControl({ mode, onChange }: { mode: OutfitViewMode; onChange: 
   return <NativePicker value={mode} onValueChange={onChange} options={[{ label: "Look", value: "look" }, { label: "Items", value: "items" }]} label="Preview mode" />;
 }
 
-function LookPreview({ items }: { items: ClothingItem[] }) {
+function LookPreview({ items }: { items: Item[] }) {
   return <Image source={require("@/assets/look-preview.png")} contentFit="contain" style={{ width: "100%", height: 240, borderRadius: 12 }} />;
 }
 
-function ItemGrid({ items }: { items: ClothingItem[] }) {
+function ItemGrid({ items }: { items: Item[] }) {
   return (
     <View className="flex-row flex-wrap gap-3">
       {items.slice(0, 4).map((item) => (
@@ -169,13 +169,13 @@ function ItemGrid({ items }: { items: ClothingItem[] }) {
   );
 }
 
-function ItemTile({ item }: { item: ClothingItem }) {
+function ItemTile({ item }: { item: Item }) {
   return (
     <Pressable onPress={() => router.push(`/item/${item.id}`)} className="w-[48%] gap-2 rounded-[16px] p-3 active:scale-[0.97]">
-      <ItemImage imageUrl={item.imageUrl} label={item.name} size="small" />
+      <ItemImage imageUrl={item.displayAssetUri} label={item.name} size="small" />
       <View className="gap-1">
         <Text numberOfLines={1} className="text-xs font-bold text-black dark:text-[#FFF9ED]">{item.name}</Text>
-        <Text className="text-xs font-medium capitalize text-black/42 dark:text-white/42">{item.color}</Text>
+        <Text className="text-xs font-medium capitalize text-black/42 dark:text-white/42">{item.primaryColor}</Text>
       </View>
     </Pressable>
   );

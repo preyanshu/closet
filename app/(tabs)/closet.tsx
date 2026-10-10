@@ -1,5 +1,6 @@
 import { adaptiveColors, radius, spacing, Button, CircularGlassButton as GlassButton, GlassLayer, ItemImage, NativeSwitch, Screen, SelectionRow, Sheet, WardrobeIcon } from "@/components/ui";
-import { aesthetics, categoryLabels, type ClothingCategory, type ClothingItem } from "@/data/mock";
+import { aesthetics, categoryLabels, type ClothingCategory, type Item } from "@/data/mock";
+import { priceToNumber } from "@/types/domain";
 import { useCloset } from "@/state/closet-context";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
@@ -37,7 +38,7 @@ const swatchColor = (color: string) => {
   return map[color] ?? color;
 };
 
-const seasonOf = (lastWorn: string | null): string | null => {
+const seasonOf = (lastWorn: string | null | undefined): string | null => {
   if (!lastWorn) return null;
   const month = new Date(lastWorn).getMonth();
   if (month === 11 || month <= 1) return "winter";
@@ -46,9 +47,9 @@ const seasonOf = (lastWorn: string | null): string | null => {
   return "fall";
 };
 
-const costPerWearOf = (item: ClothingItem) => (item.wearCount > 0 ? item.price / item.wearCount : item.price);
+const costPerWearOf = (item: Item) => (item.wearCount > 0 ? (priceToNumber(item) ?? 0) / item.wearCount : priceToNumber(item) ?? 0);
 
-const formatCostPerWear = (item: ClothingItem) => {
+const formatCostPerWear = (item: Item) => {
   const value = costPerWearOf(item);
   return `$${value < 10 ? value.toFixed(2) : Math.round(value).toString()}`;
 };
@@ -86,12 +87,12 @@ export default function ClosetScreen() {
     const searchMatches =
       !search ||
       item.name.toLowerCase().includes(search.toLowerCase()) ||
-      item.color.toLowerCase().includes(search.toLowerCase()) ||
+      item.primaryColor.toLowerCase().includes(search.toLowerCase()) ||
       categoryLabels[item.category].toLowerCase().includes(search.toLowerCase());
     const quickMatches = quick === "all" || (quick === "favorites" ? isFavorite(item.id) : !item.lastWorn);
-    const colorMatches = selectedColors.length === 0 || selectedColors.includes(item.color);
+    const colorMatches = selectedColors.length === 0 || selectedColors.includes(item.primaryColor);
     const seasonMatches = selectedSeasons.length === 0 || (seasonOf(item.lastWorn) != null && selectedSeasons.includes(seasonOf(item.lastWorn)!));
-    const aestheticMatches = aestheticId === "all" || item.aesthetics.includes(aestheticId);
+    const aestheticMatches = aestheticId === "all" || item.styleTags.includes(aestheticId);
     return categoryMatches && searchMatches && quickMatches && colorMatches && seasonMatches && aestheticMatches;
   });
 
@@ -108,7 +109,7 @@ export default function ClosetScreen() {
       case "mostWorn":
         return b.wearCount - a.wearCount;
       case "price":
-        return b.price - a.price;
+        return (priceToNumber(b) ?? 0) - (priceToNumber(a) ?? 0);
       case "name":
         return a.name.localeCompare(b.name);
     }
@@ -207,7 +208,7 @@ export default function ClosetScreen() {
                   }}
                 >
                   <View style={{ position: "relative" }}>
-                    <ItemImage imageUrl={item.imageUrl} label={item.name} style={{ aspectRatio: 1, borderRadius: 8 }} />
+                    <ItemImage imageUrl={item.displayAssetUri} label={item.name} style={{ aspectRatio: 1, borderRadius: 8 }} />
                     <View style={{ position: "absolute", top: 4, right: 4 }}>
                     <GlassButton
                       icon={favorite ? "heart.fill" : "heart"}
@@ -258,7 +259,7 @@ export default function ClosetScreen() {
                 >
                   <View style={{ position: "relative" }}>
                     <ItemImage
-                      imageUrl={item.imageUrl}
+                      imageUrl={item.displayAssetUri}
                       label={item.name}
                       style={{ width: "100%", aspectRatio: 1, borderRadius: 12 }}
                     />

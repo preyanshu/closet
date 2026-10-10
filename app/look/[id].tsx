@@ -1,5 +1,5 @@
 import { adaptiveColors, radius, Card, ModalHeader } from "@/components/ui";
-import { categoryLabels, mockOutfitAlbums, type ClothingItem, type Outfit } from "@/data/mock";
+import { categoryLabels, mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
 import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
 import { Image } from "expo-image";
@@ -7,7 +7,7 @@ import { itemImageSource } from "@/services/item-image";
 import { useLocalSearchParams } from "expo-router";
 import { ScrollView, Text, View } from "react-native";
 
-type DetailOutfit = Outfit & { source: "saved" | "mine" | "mock" };
+type DetailOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" | "mock" };
 
 export default function LookDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -21,7 +21,7 @@ export default function LookDetailScreen() {
   const outfit = [...generatedLooks, ...customLooks, ...demoLooks].find((look) => look.id === id);
   const outfitItems = outfit?.itemIds
     .map((itemId) => items.find((item) => item.id === itemId))
-    .filter((item): item is ClothingItem => Boolean(item)) ?? [];
+    .filter((item): item is Item => Boolean(item)) ?? [];
 
   if (!outfit) {
     return (
@@ -58,13 +58,13 @@ export default function LookDetailScreen() {
         {outfitItems.map((item) => (
           <Card key={item.id} className="flex-row items-center gap-3 rounded-[18px] p-3">
             <View style={{ width: 68, height: 68, borderRadius: 12, overflow: "hidden", backgroundColor: adaptiveColors.surfaceMuted }}>
-              <Image source={getItemImageSource(item.imageUrl)} contentFit="cover" style={{ width: "100%", height: "100%" }} />
+              <Image source={getItemImageSource(item.displayAssetUri)} contentFit="cover" style={{ width: "100%", height: "100%" }} />
             </View>
             <View style={{ flex: 1, gap: 5 }}>
               <Text style={{ fontSize: 15, fontWeight: "800", color: adaptiveColors.label }}>{item.name}</Text>
-              <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{categoryLabels[item.category]} · {formatTag(item.color)}</Text>
+              <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{categoryLabels[item.category]} · {formatTag(item.primaryColor)}</Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-                {item.aesthetics.slice(0, 3).map((aesthetic) => <InfoChip key={aesthetic} label={formatTag(aesthetic)} small />)}
+                {item.styleTags.slice(0, 3).map((aesthetic) => <InfoChip key={aesthetic} label={formatTag(aesthetic)} small />)}
               </View>
             </View>
           </Card>

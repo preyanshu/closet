@@ -1,7 +1,7 @@
 import { Button, CircularGlassButton, EmptyState, ItemImage, Screen, WardrobeIcon, motion, radius, spacing, type as typography } from "@/components/ui";
 import { itemImageSource } from "@/services/item-image";
 import { Image } from "expo-image";
-import { aesthetics, categoryLabels, type ClothingCategory, type ClothingItem, type Outfit } from "@/data/mock";
+import { aesthetics, categoryLabels, type ClothingCategory, type Item, type Outfit } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
 import { useWardrobeTheme } from "@/theme/wardrobe-theme";
 import * as Haptics from "expo-haptics";
@@ -60,14 +60,14 @@ export default function BuilderScreen() {
   const [error, setError] = useState<string>();
   const progress = "Putting the finishing touches on your preview…";
   useEffect(() => () => request.current?.abort(), []);
-  const chosen = useMemo(() => slots.flatMap(({ category }) => selectedIds[category].map(id => items.find(item => item.id === id))).filter((item): item is ClothingItem => Boolean(item)), [items, selectedIds]);
+  const chosen = useMemo(() => slots.flatMap(({ category }) => selectedIds[category].map(id => items.find(item => item.id === id))).filter((item): item is Item => Boolean(item)), [items, selectedIds]);
   const categoryItems = useMemo(() => items.filter((item) => item.category === activeCategory), [items, activeCategory]);
   const multiple = activeCategory === "outerwear" || activeCategory === "accessory";
   const columnCount = width >= 560 && fontScale < 1.5 ? 3 : 2;
   const itemWidth = Math.floor((Math.min(width, 640) - spacing.lg * 2 - spacing.sm * (columnCount - 1)) / columnCount);
   const taste = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const item of chosen) for (const id of item.aesthetics) counts.set(id, (counts.get(id) ?? 0) + 1);
+    for (const item of chosen) for (const id of item.styleTags) counts.set(id, (counts.get(id) ?? 0) + 1);
     const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
     return { aestheticId: ranked[0]?.[0] ?? "custom", tags: ranked.slice(0, 3).map(([id]) => aestheticLabel(id)) };
   }, [chosen]);
@@ -87,7 +87,7 @@ export default function BuilderScreen() {
     contentOpacity.value = withTiming(1, config);
     contentOffset.value = withTiming(0, config);
   };
-  const equip = (item: ClothingItem) => {
+  const equip = (item: Item) => {
     feedback(); setPreviewUri(undefined); setError(undefined);
     setSelectedIds(current => {
       const ids = current[item.category];
@@ -115,7 +115,7 @@ export default function BuilderScreen() {
   const save = () => {
     if (!chosen.length || !previewUri || phase !== "preview" || saving.current) return;
     saving.current = true;
-    const outfit: Outfit = { id: `my-look-${Date.now()}`, previewUri, ...demoDetails, itemIds: chosen.map((item) => item.id), aestheticId: taste.aestheticId };
+    const outfit: Outfit = { id: `my-look-${Date.now()}`, source: "manual", isDemo: false, previewUri, ...demoDetails, itemIds: chosen.map((item) => item.id), aestheticId: taste.aestheticId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     addMyLook(outfit);
     if (process.env.EXPO_OS === "ios") void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     close();
@@ -197,7 +197,7 @@ export default function BuilderScreen() {
                       style={{ width: itemWidth, gap: 8, transform: [{ scale: pressedId === id ? motion.pressScale : 1 }] }}
                     >
                       <View style={[styles.itemArt, { height: itemWidth * 1.15, backgroundColor: colors.surfaceMuted, borderColor: selected ? colors.label : "transparent" }]}>
-                        <ItemImage imageUrl={item.imageUrl} label={item.name} contentFit="contain" style={{ width: "100%", height: "100%", aspectRatio: undefined, borderWidth: 0, borderRadius: 0, backgroundColor: "transparent" }} />
+                        <ItemImage imageUrl={item.displayAssetUri} label={item.name} contentFit="contain" style={{ width: "100%", height: "100%", aspectRatio: undefined, borderWidth: 0, borderRadius: 0, backgroundColor: "transparent" }} />
                         <View style={[styles.badge, { backgroundColor: selected ? colors.label : colors.surface, borderColor: selected ? colors.label : colors.border }]}>
                           <WardrobeIcon name={selected ? "checkmark" : "plus"} color={selected ? colors.onAccent : colors.secondaryLabel} size={12} />
                         </View>
@@ -220,7 +220,7 @@ export default function BuilderScreen() {
         ) : phase === "generating" ? (
           <View style={styles.generation}>
             <View style={styles.generationPieces}>
-              {chosen.slice(0, 3).map(item => <ItemImage key={item.id} imageUrl={item.imageUrl} label={item.name} contentFit="contain" style={{ width: 72, height: 92, aspectRatio: undefined, borderWidth: 0, borderRadius: radius.sm, backgroundColor: colors.surface }} />)}
+              {chosen.slice(0, 3).map(item => <ItemImage key={item.id} imageUrl={item.displayAssetUri} label={item.name} contentFit="contain" style={{ width: 72, height: 92, aspectRatio: undefined, borderWidth: 0, borderRadius: radius.sm, backgroundColor: colors.surface }} />)}
             </View>
             <ActivityIndicator color={colors.accent} />
             <Text style={{ ...typography.sectionTitle, color: colors.label, textAlign: "center" }}>Creating your outfit avatar</Text>
@@ -264,7 +264,7 @@ export default function BuilderScreen() {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.selectionTray}>
               {chosen.map(item => (
                 <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} onPress={() => equip(item)} style={{ width: 52, height: 58, justifyContent: "flex-end" }}>
-                  <ItemImage imageUrl={item.imageUrl} label={item.name} contentFit="contain" style={{ width: 48, height: 48, aspectRatio: undefined, borderWidth: 0, borderRadius: radius.sm }} />
+                  <ItemImage imageUrl={item.displayAssetUri} label={item.name} contentFit="contain" style={{ width: 48, height: 48, aspectRatio: undefined, borderWidth: 0, borderRadius: radius.sm }} />
                   <View style={[styles.removeBadge, { backgroundColor: colors.label }]}><WardrobeIcon name="xmark" color={colors.onAccent} size={8} /></View>
                 </Pressable>
               ))}

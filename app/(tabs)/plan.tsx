@@ -1,5 +1,5 @@
 import { adaptiveColors, radius, GlassButton, Screen, SectionHeader, Sheet, WardrobeIcon } from "@/components/ui";
-import { clothingItems, mockOutfitAlbums, type ClothingItem, type Outfit } from "@/data/mock";
+import { clothingItems, mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
 import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
 import { Image } from "expo-image";
@@ -53,7 +53,7 @@ export default function PlanScreen() {
         </View>
 
         <View style={{ flexDirection: "row", gap: 28, borderBottomWidth: 1, borderColor: adaptiveColors.border, paddingBottom: 18 }}>
-          <MiniInsight title="Most worn" value="Cream knit polo" imageUrl={clothingItems[2].imageUrl} />
+          <MiniInsight title="Most worn" value="Cream knit polo" imageUrl={clothingItems[2].displayAssetUri} />
           <MiniInsight title="Closet usage" value="0%" />
         </View>
 
@@ -187,7 +187,7 @@ function OutfitPickerSheet({
   visible: boolean;
   dateLabel: string;
   outfits: Outfit[];
-  items: ClothingItem[];
+  items: Item[];
   onClose: () => void;
   onSelect: (outfit: Outfit) => void;
 }) {
@@ -197,7 +197,7 @@ function OutfitPickerSheet({
             {outfits.map((outfit) => {
               const outfitItems = outfit.itemIds
                 .map((id) => items.find((item) => item.id === id))
-                .filter((item): item is ClothingItem => Boolean(item));
+                .filter((item): item is Item => Boolean(item));
 
               return (
                 <Pressable key={outfit.id} accessibilityLabel={`Select ${outfit.label}`} onPress={() => onSelect(outfit)} style={{ width: "47%", gap: 8 }}>

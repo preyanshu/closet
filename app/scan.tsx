@@ -1,4 +1,5 @@
 import { aesthetics, categoryLabels, type ClothingCategory } from "@/data/mock";
+import { defaultRoleForCategory } from "@/types/taxonomy";
 import { adaptiveColors, radius, Button, GlassPillButton, ModalHeader, WardrobeIcon } from "@/components/ui";
 import { detectGarment, suggestAesthetics } from "@/services/garment-detect";
 import { stageGarment } from "@/services/garment-staging";
@@ -50,7 +51,7 @@ type PendingItem = {
   name: string;
   category: ClothingCategory;
   color: string;
-  price: number;
+  price: number | null;
   aesthetics: string[];
   error: string | null;
 };
@@ -146,7 +147,7 @@ export default function ScanModal() {
         name: detected.name,
         category: detected.category,
         color: detected.primary_color,
-        price: 0,
+        price: null,
         aesthetics: suggestAesthetics(detected),
         progress: 100,
         error: null,
@@ -174,7 +175,7 @@ export default function ScanModal() {
       name: "Scanning…",
       category: "top",
       color: "black",
-      price: 0,
+      price: null,
       aesthetics: [],
       error: null,
     };
@@ -257,17 +258,29 @@ export default function ScanModal() {
     const itemsToSave = source.filter((item) => includedIds.has(item.id) && item.status === "ready");
     if (itemsToSave.length === 0) return;
     const savedIds = new Set(itemsToSave.map((i) => i.id));
+    const now = new Date().toISOString();
     itemsToSave.forEach((item) => {
       addItem({
         id: `scan-${Date.now()}-${item.id}`,
+        ownerId: "local-demo",
         name: item.name,
         category: item.category,
-        color: item.color,
-        aesthetics: item.aesthetics,
-        imageUrl: item.cleanUri ?? item.originalUri,
-        lastWorn: null,
-        price: item.price,
+        role: defaultRoleForCategory(item.category),
+        primaryColor: item.color.toLowerCase(),
+        secondaryColors: [],
+        styleTags: item.aesthetics,
+        originalAssetUri: item.originalUri,
+        displayAssetUri: item.cleanUri ?? item.originalUri,
+        priceMinor: item.price == null ? null : Math.round(item.price * 100),
+        priceCurrency: "USD",
         wearCount: 0,
+        lastWorn: null,
+        availabilityStatus: "available",
+        lifecycleStatus: "owned",
+        processingStatus: item.progress >= 100 ? "ready" : "partial",
+        createdAt: now,
+        updatedAt: now,
+        revision: 1,
       });
     });
     setPendingItems((prev) => prev.filter((i) => !savedIds.has(i.id)));
@@ -677,7 +690,7 @@ function TrayCard({ item, width, onPress, onRemove }: { item: PendingItem; width
 
 function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemove, onClose }: { item: PendingItem; batchMode: boolean; position: number; total: number; onSave: (item: PendingItem) => void; onRetry: (id: string) => void; onRemove: (id: string) => void; onClose: () => void }) {
   const [name, setName] = useState(item.name);
-  const [price, setPrice] = useState(item.price > 0 ? String(item.price) : "");
+  const [price, setPrice] = useState(item.price != null && item.price > 0 ? String(item.price) : "");
   const [category, setCategory] = useState<ClothingCategory>(item.category);
   const [color, setColor] = useState(item.color);
   const [customColor, setCustomColor] = useState(swatchColor(item.color));
@@ -687,9 +700,9 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
   const [error, setError] = useState("");
   const previewSource = resolveStagedSource(item.cleanUri) ?? { uri: item.originalUri };
   const save = () => {
-    const amount = price.trim() === "" ? 0 : Number(price.replace(",", "."));
+    const amount = price.trim() === "" ? null : Number(price.replace(",", "."));
     if (!name.trim()) { setError("Enter a name for this piece."); return; }
-    if (!Number.isFinite(amount) || amount < 0) { setError("Enter a valid price of zero or more."); return; }
+    if (amount != null && (!Number.isFinite(amount) || amount < 0)) { setError("Enter a valid price of zero or more."); return; }
     setError("");
     onSave({ ...item, name: name.trim(), price: amount, category, color, aesthetics: selectedAesthetics, error: null, progress: 100 });
   };
@@ -709,7 +722,7 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
           <TextInput accessibilityLabel="Item name" value={name} onChangeText={setName} placeholder="Name your piece" placeholderTextColor={adaptiveColors.tertiaryLabel} style={reviewInputStyle} returnKeyType="done" />
         </ReviewField>
         <ReviewField label="Price ($)">
-          <TextInput accessibilityLabel="Price in dollars" value={price} onChangeText={setPrice} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={adaptiveColors.tertiaryLabel} style={reviewInputStyle} />
+          <TextInput accessibilityLabel="Price in dollars" value={price} onChangeText={setPrice} keyboardType="decimal-pad" placeholder="Optional" placeholderTextColor={adaptiveColors.tertiaryLabel} style={reviewInputStyle} />
         </ReviewField>
         <ReviewField label="Category">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>

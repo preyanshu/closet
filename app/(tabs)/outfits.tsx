@@ -1,5 +1,5 @@
 import { adaptiveColors, radius, spacing, CircularGlassButton, FilterChip, ItemImage, WardrobeIcon } from "@/components/ui";
-import { mockOutfitAlbums, type ClothingItem, type Outfit } from "@/data/mock";
+import { mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
 import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
 import * as Haptics from "expo-haptics";
@@ -11,7 +11,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 
 const filters = ["All", "Favorites", "Office", "Casual", "Summer", "Evening", "Travel"] as const;
 type Filter = (typeof filters)[number];
-type LibraryOutfit = Outfit & { source: "saved" | "mine" | "mock" };
+type LibraryOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" | "mock" };
 
 export default function OutfitsScreen() {
   const { items, myLooks, savedLookIds, toggleSavedLook, isSavedLook } = useCloset();
@@ -70,7 +70,7 @@ export default function OutfitsScreen() {
         {filteredOutfits.length > 0 ? (
           <View onLayout={(event) => setGridWidth(event.nativeEvent.layout.width)} style={{ width: "100%", flexDirection: "row", flexWrap: "wrap", columnGap: gap, rowGap: spacing.xl }}>
             {filteredOutfits.map((outfit) => {
-              const outfitItems = outfit.itemIds.map((id) => items.find((item) => item.id === id)).filter((item): item is ClothingItem => Boolean(item));
+              const outfitItems = outfit.itemIds.map((id) => items.find((item) => item.id === id)).filter((item): item is Item => Boolean(item));
               const favorite = isSavedLook(outfit.id);
               const key = `${outfit.source}-${outfit.id}`;
               return <OutfitCard key={key} outfit={outfit} items={outfitItems} favorite={favorite} width={columnWidth} pressed={pressedId === key} onPressIn={() => setPressedId(key)} onPressOut={() => setPressedId(null)} onPress={() => router.push(`/look/${outfit.id}`)} onFavorite={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); toggleSavedLook(outfit.id); }} />;
@@ -82,7 +82,7 @@ export default function OutfitsScreen() {
   );
 }
 
-function OutfitCard({ outfit, items, favorite, width, pressed, onPress, onPressIn, onPressOut, onFavorite }: { outfit: LibraryOutfit; items: ClothingItem[]; favorite: boolean; width: number | string; pressed: boolean; onPress: () => void; onPressIn: () => void; onPressOut: () => void; onFavorite: () => void }) {
+function OutfitCard({ outfit, items, favorite, width, pressed, onPress, onPressIn, onPressOut, onFavorite }: { outfit: LibraryOutfit; items: Item[]; favorite: boolean; width: number | string; pressed: boolean; onPress: () => void; onPressIn: () => void; onPressOut: () => void; onFavorite: () => void }) {
   return (
     <View style={{ width: width as number, gap: spacing.xs }}>
       <Pressable accessibilityRole="button" accessibilityLabel={`Open ${outfit.label}`} onPress={onPress} onPressIn={onPressIn} onPressOut={onPressOut} style={{ transform: [{ scale: pressed ? 0.96 : 1 }] }}>
@@ -102,14 +102,14 @@ function OutfitCard({ outfit, items, favorite, width, pressed, onPress, onPressI
   );
 }
 
-function OutfitArtwork({ items }: { items: ClothingItem[] }) {
+function OutfitArtwork({ items }: { items: Item[] }) {
   const previews = items.slice(0, 4);
   if (previews.length === 0) return <Image source={require("@/assets/look-preview.png")} contentFit="contain" style={{ width: "100%", height: "100%", borderRadius: 14, backgroundColor: adaptiveColors.surfaceMuted }} />;
   const single = previews.length === 1;
   const pair = previews.length === 2;
   return (
     <View style={{ flex: 1, flexDirection: "row", flexWrap: "wrap", gap: 5 }}>
-      {previews.map((item) => <ItemImage key={item.id} imageUrl={item.imageUrl} label={item.name} contentFit="contain" style={{ width: single ? "100%" : "49%", height: single || pair ? "100%" : "49%", aspectRatio: undefined, borderRadius: 12 }} />)}
+      {previews.map((item) => <ItemImage key={item.id} imageUrl={item.displayAssetUri} label={item.name} contentFit="contain" style={{ width: single ? "100%" : "49%", height: single || pair ? "100%" : "49%", aspectRatio: undefined, borderRadius: 12 }} />)}
     </View>
   );
 }

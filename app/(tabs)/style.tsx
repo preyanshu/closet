@@ -86,7 +86,7 @@ export default function StyleScreen() {
       <View style={{ gap: 10 }}>
         <Text style={{ fontSize: 13, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5 }}>Style directions</Text>
         {aesthetics.map((aesthetic) => {
-          const count = items.filter((i) => i.aesthetics.includes(aesthetic.id)).length;
+          const count = items.filter((i) => i.styleTags.includes(aesthetic.id)).length;
           return (
             <Card key={aesthetic.id} className="gap-3">
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>

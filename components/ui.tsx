@@ -1,4 +1,4 @@
-import { type ClothingItem } from "@/data/mock";
+import { type Item } from "@/data/mock";
 import { itemImageSource } from "@/services/item-image";
 export { adaptiveColors } from "@/theme/colors";
 export { control, elevation, iconSize, motion, radius, spacing, touchTarget, type } from "@/theme/tokens";
@@ -554,7 +554,7 @@ export function ItemImage({ imageUrl, label, size = "large", style, contentFit =
   );
 }
 
-export function OutfitPreviewCard({ title, subtitle, items, saved, badge, compact = false, primaryIcon = "calendar", primaryLabel = "Plan", onPrimaryPress, onSavePress }: { title: string; subtitle: string; items: ClothingItem[]; saved?: boolean; badge?: string; compact?: boolean; primaryIcon?: SymbolName; primaryLabel?: string; onPrimaryPress?: () => void; onSavePress?: () => void }) {
+export function OutfitPreviewCard({ title, subtitle, items, saved, badge, compact = false, primaryIcon = "calendar", primaryLabel = "Plan", onPrimaryPress, onSavePress }: { title: string; subtitle: string; items: Item[]; saved?: boolean; badge?: string; compact?: boolean; primaryIcon?: SymbolName; primaryLabel?: string; onPrimaryPress?: () => void; onSavePress?: () => void }) {
   const { colors } = useWardrobeTheme();
   return (
     <Card style={{ padding: 0, borderRadius: radius.lg }}>

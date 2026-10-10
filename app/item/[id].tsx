@@ -4,6 +4,7 @@ import { useLocalSearchParams } from "expo-router";
 import { ScrollView, Text, View } from "react-native";
 import { useCloset } from "@/state/closet-context";
 import { categoryLabels } from "@/data/mock";
+import { formatPrice, priceToNumber } from "@/types/domain";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function ItemDetailScreen() {
@@ -25,7 +26,7 @@ export default function ItemDetailScreen() {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: adaptiveColors.canvas }} contentInsetAdjustmentBehavior="automatic">
       <View style={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl, gap: spacing.xl }}>
-        <ItemImage imageUrl={item.imageUrl} label={item.name} contentFit="contain" style={{ borderRadius: radius.lg, width: "100%", height: 240, aspectRatio: undefined, borderColor: adaptiveColors.border }} />
+        <ItemImage imageUrl={item.displayAssetUri} label={item.name} contentFit="contain" style={{ borderRadius: radius.lg, width: "100%", height: 240, aspectRatio: undefined, borderColor: adaptiveColors.border }} />
 
         <View style={{ gap: 16 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: spacing.md }}>
@@ -42,10 +43,10 @@ export default function ItemDetailScreen() {
             />
           </View>
 
-          {item.aesthetics.length > 0 ? <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
+          {item.styleTags.length > 0 ? <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
           <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>Vibes</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
-            {item.aesthetics.map((a) => (
+            {item.styleTags.map((a) => (
               <View key={a} style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.pill, borderWidth: 1, borderColor: adaptiveColors.border, backgroundColor: adaptiveColors.surface }}>
                 <Text style={{ fontSize: 13, fontWeight: "500", color: adaptiveColors.secondaryLabel, textTransform: "capitalize" }}>{a.replace(/-/g, " ")}</Text>
               </View>
@@ -56,16 +57,16 @@ export default function ItemDetailScreen() {
           <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
           <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>Piece details</Text>
           <View style={{ borderRadius: radius.lg, backgroundColor: adaptiveColors.surface, borderWidth: 1, borderColor: adaptiveColors.border, paddingHorizontal: spacing.md }}>
-            <InfoRow icon="dollarsign.circle" label="Price" value={`$${item.price.toLocaleString()}`} />
+            <InfoRow icon="dollarsign.circle" label="Price" value={formatPrice(item)} />
             <InfoRow icon="tag" label="Category" value={categoryLabels[item.category]} />
-            <InfoRow icon="paintpalette" label="Color" value={item.color} last />
+            <InfoRow icon="paintpalette" label="Color" value={item.primaryColor} last />
           </View>
           </View>
           <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
           <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>Wear history</Text>
           <View style={{ borderRadius: radius.lg, backgroundColor: adaptiveColors.surface, borderWidth: 1, borderColor: adaptiveColors.border, paddingHorizontal: spacing.md }}>
             <InfoRow icon="clock" label="Worn" value={item.wearCount > 0 ? `${item.wearCount} times` : "Never"} />
-            <InfoRow icon="chart.line.downtrend.xyaxis" label="Cost per wear" value={item.wearCount > 0 ? `$${(item.price / item.wearCount).toFixed(2)}` : "—"} />
+            <InfoRow icon="chart.line.downtrend.xyaxis" label="Cost per wear" value={(() => { const price = priceToNumber(item); return price != null && item.wearCount > 0 ? `$${(price / item.wearCount).toFixed(2)}` : "—"; })()} />
             <InfoRow icon="clock" label="Last worn" value={item.lastWorn ?? "Never"} last />
           </View>
           </View>

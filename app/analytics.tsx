@@ -1,5 +1,6 @@
 import { adaptiveColors, radius, Card, ModalHeader, Screen } from "@/components/ui";
 import { categoryLabels, type ClothingCategory } from "@/data/mock";
+import { priceToNumber } from "@/types/domain";
 import { useCloset } from "@/state/closet-context";
 import { SymbolView } from "expo-symbols";
 import { Text, View } from "react-native";
@@ -19,16 +20,17 @@ const currency = (n: number, cents = false) =>
 export default function AnalyticsScreen() {
   const { items } = useCloset();
 
-  const totalValue = items.reduce((sum, i) => sum + i.price, 0);
+  const totalValue = items.reduce((sum, i) => sum + (priceToNumber(i) ?? 0), 0);
   const totalWears = items.reduce((sum, i) => sum + i.wearCount, 0);
   const avgCPW = totalWears > 0 ? totalValue / totalWears : 0;
 
   const unworn = items.filter((i) => i.wearCount === 0);
-  const unwornValue = unworn.reduce((sum, i) => sum + i.price, 0);
+  const unwornValue = unworn.reduce((sum, i) => sum + (priceToNumber(i) ?? 0), 0);
+  const unknownPriceCount = items.filter((i) => priceToNumber(i) == null).length;
 
   const categoryStats = (Object.keys(categoryLabels) as ClothingCategory[]).map((category) => {
     const group = items.filter((i) => i.category === category);
-    return { category, count: group.length, value: group.reduce((s, i) => s + i.price, 0) };
+    return { category, count: group.length, value: group.reduce((s, i) => s + (priceToNumber(i) ?? 0), 0) };
   });
   const donutSegments = categoryStats.filter((s) => s.value > 0).map((s) => ({ value: s.value, color: categoryColors[s.category] }));
   const dominant = categoryStats.reduce((a, b) => (b.value > a.value ? b : a), categoryStats[0]);
@@ -43,6 +45,7 @@ export default function AnalyticsScreen() {
           <Text style={{ fontSize: 11, fontWeight: "800", letterSpacing: 2.2, color: "rgba(255,253,243,0.45)", textTransform: "uppercase" }}>Total wardrobe value</Text>
           <Text style={{ fontSize: 42, fontWeight: "800", color: adaptiveColors.onAccent, letterSpacing: -1.6, fontVariant: ["tabular-nums"] }}>{currency(totalValue)}</Text>
           <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(255,253,243,0.55)" }}>{items.length} pieces · avg {currency(avgCPW, true)} per wear</Text>
+          {unknownPriceCount > 0 ? <Text style={{ fontSize: 12, fontWeight: "600", color: "#FFB340" }}>{unknownPriceCount} {unknownPriceCount === 1 ? "piece has" : "pieces have"} no price recorded</Text> : null}
         </View>
 
         <View style={{ flexDirection: "row", gap: 16, borderTopWidth: 1, borderTopColor: "rgba(255,253,243,0.12)", paddingTop: 16 }}>

@@ -1,9 +1,9 @@
-import { clothingItems, type ClothingItem, type Outfit } from "@/data/mock";
+import { clothingItems, type Item, type Outfit } from "@/data/mock";
 import { createContext, type PropsWithChildren, use, useCallback, useMemo, useState } from "react";
 
 type ClosetContextValue = {
-  items: ClothingItem[];
-  addItem: (item: ClothingItem) => void;
+  items: Item[];
+  addItem: (item: Item) => void;
   addedMessage: string | null;
   setAddedMessage: (message: string | null) => void;
   myLooks: Outfit[];
@@ -22,14 +22,14 @@ type ClosetContextValue = {
 const ClosetContext = createContext<ClosetContextValue | null>(null);
 
 export function ClosetProvider({ children }: PropsWithChildren) {
-  const [items, setItems] = useState<ClothingItem[]>(() => [...clothingItems]);
+  const [items, setItems] = useState<Item[]>(() => [...clothingItems]);
   const [addedMessage, setAddedMessage] = useState<string | null>(null);
   const [myLooks, setMyLooks] = useState<Outfit[]>([]);
   const [savedLookIds, setSavedLookIds] = useState<Set<string>>(() => new Set(["mock-album-office-01", "mock-album-casual-01"]));
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => new Set(["item-02", "item-07", "item-10"]));
   const [stylePreferences, setStylePreferences] = useState<string[]>(["minimal", "old-money"]);
 
-  const addItem = useCallback((item: ClothingItem) => {
+  const addItem = useCallback((item: Item) => {
     setItems((prev) => [item, ...prev]);
   }, []);
 
