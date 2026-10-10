@@ -113,7 +113,41 @@ render blank rows for the demo wardrobe.
   the client previously inlined it, it should still be rotated before shipping a real build;
   rotation + deploy + auth are deferred while running locally.
 
+## PR4 — Rules-first composition engine
+
+### Engine (`services/outfit-engine.ts`)
+- Replaces the old category / array-offset placeholder with a deterministic, rules-first
+  composer. No randomness, so rendered outfit ids are stable across renders and persistable
+  via `savedLookIds`.
+- `composeOutfits(context, items)` → `Outfit[]`. `context` carries optional `occasion`
+  (everyday/work/casual/dinner/evening/formal/travel), `season` (warm/cool/cold),
+  `styleTags`, `anchorItemId`, and `count` (default 2).
+- Eligibility (`isEligible`): `lifecycleStatus === "owned"`, `availabilityStatus ===
+  "available"`, `processingStatus !== "failed"` — "in laundry" is not "not owned".
+- Templates: separates (`base_top` + `bottom`) or `one_piece`, bounded candidate set (≤60).
+- Roles drive placement (`ROLE_ORDER`): base → mid → outer → footwear → accessories; layers
+  selected by season/occasion (cold ⇒ outer, cool ⇒ mid, work/evening ⇒ blazer-style outer).
+- Scoring: style-tag match, `formality` vs occasion, `warmthBand` vs season distance, neutral
+  color, wearCount (reliability), anchor bonus; color-harmony bonus on the set. Anchor
+  guarantee: `ensureAnchor` swaps/adds the anchor item and heavily penalizes compositions
+  that drop it.
+- Diversification: greedy pick that penalizes reusing the same bottom/one-piece and top, so a
+  2-outfit batch shows different silhouettes.
+- Explainer: personae (`familiar`/`dressy`/`comfort`/`underused`/`fresh`) and descriptions
+  are generated from facts only (hero piece, occasion), matching report §7/§13.
+- Tags: 2–4, mapping to the outfit-library filter chips (Office / Casual / Summer / Evening /
+  Travel) plus the batch's dominant style tags.
+- `generateOutfitsForToday(aestheticId, items)` still returns 2 uniforms for the home/plan/
+  calendar/outfits/look screens; `aestheticId` is treated as a style-tag preference with a
+  fallback to the full pool when too few items match.
+
+### UI parity
+- `app/look/[id].tsx` now orders items by `items[].layerOrder` (`resolveOutfitItems`) so
+  layers render top → mid → outer, shows each piece's `roleLabels` chip, and renders a layer
+  badge (L1, L2…) on layered pieces. Demo/custom looks without `items[]` fall back to flat
+  `itemIds` order.
+
 ## Deferred, not dropped (updated)
 - D1/R2 bindings + worker auth → later.
-- Rules-first composition engine → PR4.
+- Builder integration (pick pieces, tap Generate, batch) → PR5.
 - Wear-event capture wiring → PR6.

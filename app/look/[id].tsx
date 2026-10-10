@@ -2,12 +2,16 @@ import { adaptiveColors, radius, Card, ModalHeader } from "@/components/ui";
 import { categoryLabels, mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
 import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
+import { roleLabels } from "@/types/taxonomy";
+import type { ItemRole } from "@/types/domain";
 import { Image } from "expo-image";
 import { itemImageSource } from "@/services/item-image";
 import { useLocalSearchParams } from "expo-router";
 import { ScrollView, Text, View } from "react-native";
 
 type DetailOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" | "mock" };
+
+type LookItemRef = { itemId: string; role?: ItemRole; layerOrder?: number };
 
 export default function LookDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -19,9 +23,7 @@ export default function LookDetailScreen() {
   const customLooks: DetailOutfit[] = myLooks.map((outfit) => ({ ...outfit, source: "mine" }));
   const demoLooks: DetailOutfit[] = mockOutfitAlbums.map((outfit) => ({ ...outfit, source: "mock" }));
   const outfit = [...generatedLooks, ...customLooks, ...demoLooks].find((look) => look.id === id);
-  const outfitItems = outfit?.itemIds
-    .map((itemId) => items.find((item) => item.id === itemId))
-    .filter((item): item is Item => Boolean(item)) ?? [];
+  const outfitItems = resolveOutfitItems(outfit, items);
 
   if (!outfit) {
     return (
@@ -55,7 +57,7 @@ export default function LookDetailScreen() {
 
       <View style={{ gap: 12 }}>
         <Text style={{ fontSize: 17, fontWeight: "800", color: adaptiveColors.label }}>Items used</Text>
-        {outfitItems.map((item) => (
+        {outfitItems.map(({ item, layerOrder }) => (
           <Card key={item.id} className="flex-row items-center gap-3 rounded-[18px] p-3">
             <View style={{ width: 68, height: 68, borderRadius: 12, overflow: "hidden", backgroundColor: adaptiveColors.surfaceMuted }}>
               <Image source={getItemImageSource(item.displayAssetUri)} contentFit="cover" style={{ width: "100%", height: "100%" }} />
@@ -64,9 +66,13 @@ export default function LookDetailScreen() {
               <Text style={{ fontSize: 15, fontWeight: "800", color: adaptiveColors.label }}>{item.name}</Text>
               <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{categoryLabels[item.category]} · {formatTag(item.primaryColor)}</Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                <InfoChip label={roleLabels[item.role]} small />
                 {item.styleTags.slice(0, 3).map((aesthetic) => <InfoChip key={aesthetic} label={formatTag(aesthetic)} small />)}
               </View>
             </View>
+            {layerOrder != null && layerOrder > 1
+              ? <Text style={{ fontSize: 11, fontWeight: "800", color: "rgba(0,0,0,0.35)" }}>L{layerOrder - 1}</Text>
+              : null}
           </Card>
         ))}
       </View>
@@ -87,6 +93,16 @@ function formatTag(value: string) {
     .split("-")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+function resolveOutfitItems(outfit: DetailOutfit | undefined, items: Item[]): Array<{ item: Item; layerOrder?: number }> {
+  if (!outfit) return [];
+  const refs: LookItemRef[] = outfit.items?.length ? [...outfit.items] : outfit.itemIds.map((itemId) => ({ itemId }));
+  refs.sort((a, b) => (a.layerOrder ?? 0) - (b.layerOrder ?? 0) || a.itemId.localeCompare(b.itemId));
+  return refs
+    .map((ref) => ({ ref, item: items.find((item) => item.id === ref.itemId) }))
+    .filter((entry): entry is { ref: LookItemRef; item: Item } => Boolean(entry.item))
+    .map(({ ref, item }) => ({ item, layerOrder: ref.layerOrder }));
 }
 
 function getItemImageSource(imageUrl: string) {
