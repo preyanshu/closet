@@ -88,29 +88,30 @@ render blank rows for the demo wardrobe.
 ## PR3 — Server-side AI (`server/` Worker + API client)
 
 ### Worker (`server/`)
-- Hono app deployed via `wrangler` with a single Workers AI binding (`env.AI`). No account id
-  or API token is read from requests or bundled in the app.
-- `GET /health` → `{ ok }`.
-- `POST /v1/detect` — multipart `image` + optional `prompt`; runs
+- Hono app run **locally** with `wrangler dev` (no deploy, no `env.AI` binding). It proxies to
+  the Cloudflare AI REST API using `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` supplied
+  through gitignored `server/.dev.vars` (same values as the client previously used).
+- `GET /health` → `{ ok, credentials }`.
+- `POST /v1/detect` — multipart `image` + optional `prompt`; calls
   `@cf/meta/llama-3.2-11b-vision-instruct` and returns `{ text }` (raw model text, parsed
   client-side by the existing normalizer).
-- `POST /v1/stage` — multipart `image` + optional `prompt`; runs
-  `@cf/black-forest-labs/flux-2-klein-4b` and returns `{ image }` (base64). `input_image_0` is
-  passed to the binding as a byte array.
+- `POST /v1/stage` — multipart `image` + optional `prompt`; calls
+  `@cf/black-forest-labs/flux-2-klein-4b` and returns `{ image }` (base64). The incoming file
+  is forwarded as `input_image_0`.
 - Permissive CORS for web/dev. Own `package.json`, `tsconfig.json`, `wrangler.toml`,
   `README.md`; excluded from the app's root `tsconfig` so app typecheck ignores it.
 
 ### Client (`services/api/wardrobe-api.ts`)
-- Reads `EXPO_PUBLIC_WARDROBE_API_URL`. `isWardrobeApiConfigured()` gates the flows.
-  `requestDetection` / `requestStaging` POST multipart via `expo/fetch` and surface
-  `WardrobeApiError`.
+- Reads `EXPO_PUBLIC_WARDROBE_API_URL` (defaults to `http://localhost:8787` for local dev).
+  `isWardrobeApiConfigured()` gates the flows. `requestDetection` / `requestStaging` POST
+  multipart via `expo/fetch` and surface `WardrobeApiError`.
 - `garment-detect.ts` and `garment-staging.ts` now downscale locally, upload the resized
   `File`, and call the Worker. **No `EXPO_PUBLIC_CLOUDFLARE_*` usage remains in the app.**
 
 ### Security / ops
-- The previously client-exposed CF token must be rotated and the `EXPO_PUBLIC_CLOUDFLARE_*`
-  vars removed from `.env`; replace with `EXPO_PUBLIC_WARDROBE_API_URL` pointing at the
-  deployed Worker. Auth/rate-limiting and D1/R2 bindings are deferred.
+- The token now lives server-side (`server/.dev.vars`) instead of the client bundle. Because
+  the client previously inlined it, it should still be rotated before shipping a real build;
+  rotation + deploy + auth are deferred while running locally.
 
 ## Deferred, not dropped (updated)
 - D1/R2 bindings + worker auth → later.

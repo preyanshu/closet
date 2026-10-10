@@ -4,14 +4,15 @@ import { cors } from "hono/cors";
 /**
  * Wardrobe API Worker.
  *
- * Keeps Cloudflare credentials on the server. The mobile client downscales a
- * photo, uploads it as multipart, and receives either normalized vision text
- * (detect) or a rendered product image (stage). Provider tokens never ship in
- * the app bundle.
+ * Runs locally via `wrangler dev`. It calls the Cloudflare AI REST API with the
+ * same credentials the client used to hold (`CLOUDFLARE_ACCOUNT_ID` /
+ * `CLOUDFLARE_API_TOKEN`, supplied through `server/.dev.vars`). This keeps the
+ * token out of the app bundle while avoiding a deploy or a Workers AI binding.
  */
 
 type Env = {
-  AI: Ai;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
 };
 
 const DETECT_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
@@ -35,50 +36,70 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.use("*", cors({ origin: "*", allowMethods: ["GET", "POST", "OPTIONS"] }));
 
-app.get("/health", (c) => c.json({ ok: true }));
+app.get("/health", (c) => c.json({ ok: true, credentials: Boolean(credentials(c.env)) }));
 
 app.post("/v1/detect", async (c) => {
+  const creds = credentials(c.env);
+  if (!creds) return c.json({ error: "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not configured" }, 500);
+
   const form = await c.req.formData();
   const image = form.get("image") as unknown as File | null;
   const prompt = form.get("prompt");
   if (!image || typeof image.arrayBuffer !== "function") return c.json({ error: "multipart field 'image' is required" }, 400);
 
   const dataUri = await fileToDataUri(image);
-  const result = await c.env.AI.run(DETECT_MODEL, {
-    messages: [
-      { role: "system", content: typeof prompt === "string" && prompt ? prompt : DEFAULT_DETECT_PROMPT },
-      {
-        role: "user",
-        content: [
-          { type: "image_url", image_url: { url: dataUri } },
-          { type: "text", text: "Extract the garment attributes as JSON." },
-        ],
-      },
-    ],
-    max_tokens: 250,
-    temperature: 0.1,
-  } as never);
+  const response = await fetch(aiRunUrl(creds.accountId, DETECT_MODEL), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${creds.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messages: [
+        { role: "system", content: typeof prompt === "string" && prompt ? prompt : DEFAULT_DETECT_PROMPT },
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: dataUri } },
+            { type: "text", text: "Extract the garment attributes as JSON." },
+          ],
+        },
+      ],
+      max_tokens: 250,
+      temperature: 0.1,
+    }),
+  });
 
-  return c.json({ text: extractText(result) });
+  const data = await readJson(response);
+  if (!response.ok || data?.success === false) return c.json({ error: describeError(data, response.status) }, 502);
+  return c.json({ text: extractText(data?.result) });
 });
 
 app.post("/v1/stage", async (c) => {
+  const creds = credentials(c.env);
+  if (!creds) return c.json({ error: "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not configured" }, 500);
+
   const form = await c.req.formData();
   const image = form.get("image") as unknown as File | null;
   const prompt = form.get("prompt");
   if (!image || typeof image.arrayBuffer !== "function") return c.json({ error: "multipart field 'image' is required" }, 400);
 
-  const bytes = [...new Uint8Array(await image.arrayBuffer())];
-  const result = (await c.env.AI.run(STAGE_MODEL, {
-    prompt: typeof prompt === "string" && prompt ? prompt : DEFAULT_STAGING_PROMPT,
-    input_image_0: bytes,
-    width: 1024,
-    height: 1024,
-    guidance: 3.0,
-  } as never)) as { image?: string };
+  const outbound = new FormData();
+  outbound.append("input_image_0", image, image.name || "image.png");
+  outbound.append("prompt", typeof prompt === "string" && prompt ? prompt : DEFAULT_STAGING_PROMPT);
+  outbound.append("width", "1024");
+  outbound.append("height", "1024");
+  outbound.append("guidance", "3.0");
 
-  if (!result?.image) return c.json({ error: "model returned no image" }, 502);
-  return c.json({ image: result.image });
+  const response = await fetch(aiRunUrl(creds.accountId, STAGE_MODEL), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${creds.token}` },
+    body: outbound,
+  });
+
+  const data = await readJson(response);
+  if (!response.ok || data?.success === false) return c.json({ error: describeError(data, response.status) }, 502);
+
+  const imageData = data?.result?.image;
+  if (typeof imageData !== "string" || !imageData) return c.json({ error: "model returned no image" }, 502);
+  return c.json({ image: imageData });
 });
 
 app.notFound((c) => c.json({ error: "not found" }, 404));
@@ -87,6 +108,29 @@ app.onError((error, c) => {
   console.error("[wardrobe-api]", error);
   return c.json({ error: error.message || "internal error" }, 500);
 });
+
+function credentials(env: Env): { accountId: string; token: string } | null {
+  if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) return null;
+  return { accountId: env.CLOUDFLARE_ACCOUNT_ID, token: env.CLOUDFLARE_API_TOKEN };
+}
+
+function aiRunUrl(accountId: string, model: string): string {
+  return `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
+}
+
+async function readJson(response: Response): Promise<any> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
+}
+
+function describeError(data: any, status: number): string {
+  const detail = data?.errors ? JSON.stringify(data.errors) : data?.error ?? data?.raw ?? "";
+  return `Cloudflare AI request failed (${status}): ${String(detail).slice(0, 200)}`;
+}
 
 function extractText(result: unknown): string {
   if (typeof result === "string") return result;

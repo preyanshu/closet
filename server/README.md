@@ -1,43 +1,50 @@
-# Wardrobe API (Cloudflare Worker)
+# Wardrobe API (local Cloudflare Worker)
 
-Server-side proxy for wardrobe AI. Holds the Cloudflare account/token so the
-mobile app never bundles provider credentials.
+Server-side proxy for wardrobe AI, run **locally** with `wrangler dev`. It calls
+the Cloudflare AI REST API using the same account id + token the client used to
+hold, so the token stays out of the app bundle without needing a deploy or a
+Workers AI binding.
 
 ## Endpoints
 
-| Method | Path        | Body                          | Returns            |
-| ------ | ----------- | ----------------------------- | ------------------ |
-| GET    | `/health`   | –                             | `{ ok: true }`     |
-| POST   | `/v1/detect`| multipart `image`, `prompt?`  | `{ text }`         |
-| POST   | `/v1/stage` | multipart `image`, `prompt?`  | `{ image }` (b64)  |
+| Method | Path        | Body                          | Returns           |
+| ------ | ----------- | ----------------------------- | ----------------- |
+| GET    | `/health`   | –                             | `{ ok, credentials }` |
+| POST   | `/v1/detect`| multipart `image`, `prompt?`  | `{ text }`        |
+| POST   | `/v1/stage` | multipart `image`, `prompt?`  | `{ image }` (b64) |
 
-Both AI endpoints run models through the Workers AI binding (`env.AI`) — no
-account id or API token is read from the request.
-
-## Setup
+## Run locally
 
 ```bash
 cd server
 npm install
-npm run dev        # local dev server at http://localhost:8787
-npm run deploy     # deploy to https://wardrobe-api.<subdomain>.workers.dev
+npm run dev        # http://localhost:8787
 ```
 
-Then point the app at the deployed Worker by adding to the repo-root `.env`:
+Credentials are read from `server/.dev.vars` (gitignored):
 
 ```
-EXPO_PUBLIC_WARDROBE_API_URL=https://wardrobe-api.<subdomain>.workers.dev
+CLOUDFLARE_ACCOUNT_ID=...
+CLOUDFLARE_API_TOKEN=...
 ```
 
-## Security
+These already match the app's old `EXPO_PUBLIC_CLOUDFLARE_*` values. Reuse the
+same token while developing locally.
 
-The previous client used `EXPO_PUBLIC_CLOUDFLARE_ACCOUNT_ID` /
-`EXPO_PUBLIC_CLOUDFLARE_API_TOKEN`, which Expo inlines into the JS bundle. Those
-values must be treated as compromised: **rotate the Cloudflare API token** and
-remove both variables from the app's `.env` once this Worker is deployed.
+## Point the app at it
 
-## Notes
+The repo-root `.env` sets:
 
-- `input_image_0` for FLUX.2 Klein is passed as a byte array via the AI binding.
-  If Cloudflare changes the binding input shape, `npm run dev` will surface it.
-- Auth/rate-limiting and D1/R2 bindings land in a later PR.
+```
+EXPO_PUBLIC_WARDROBE_API_URL=http://localhost:8787
+```
+
+Notes:
+- iOS simulator + web reach `localhost` directly.
+- Android emulator: use `http://10.0.2.2:8787`.
+- Physical device: use your machine's LAN IP, e.g. `http://192.168.1.20:8787`.
+
+## Later
+
+When you're ready to leave local dev, deploy this Worker and rotate the token
+(see `docs/impl-spec.md`, PR3). Auth/rate-limiting and D1/R2 bindings come then.
