@@ -1,12 +1,7 @@
 import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import { File } from "expo-file-system";
 import type { ClothingCategory } from "@/data/mock";
-
-const CF_ACCOUNT_ID = process.env.EXPO_PUBLIC_CLOUDFLARE_ACCOUNT_ID ?? "";
-const CF_API_TOKEN = process.env.EXPO_PUBLIC_CLOUDFLARE_API_TOKEN ?? "";
-const CF_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
-
-const CF_API_URL = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/${CF_MODEL}`;
+import { isWardrobeApiConfigured, requestDetection } from "@/services/api/wardrobe-api";
 
 const DETECT_PROMPT = `You are a garment attribute extractor. Given a single clothing item photo, return ONLY valid JSON (no prose, no markdown fences) with exactly these fields:
 {
@@ -97,9 +92,9 @@ export function suggestAesthetics(attrs: Partial<GarmentAttributes>): string[] {
 export async function detectGarment(uri: string): Promise<GarmentAttributes> {
   log("detectGarment called, input uri:", uri);
 
-  if (!CF_ACCOUNT_ID || !CF_API_TOKEN) {
-    log("ERROR: Cloudflare credentials missing");
-    throw new Error("Cloudflare credentials not configured (EXPO_PUBLIC_CLOUDFLARE_*).");
+  if (!isWardrobeApiConfigured()) {
+    log("ERROR: wardrobe API not configured");
+    throw new Error("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
   }
 
   let resized;
@@ -115,61 +110,12 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
     throw new Error(`Failed to downscale image: ${e?.message ?? e}`);
   }
 
-  const imageFile = new File(resized.uri);
-  const base64 = await imageFile.base64();
-  const dataUri = `data:image/jpeg;base64,${base64}`;
+  const form = new FormData();
+  form.append("image", new File(resized.uri) as any);
+  form.append("prompt", DETECT_PROMPT);
 
-  const payload = {
-    messages: [
-      {
-        role: "system",
-        content: DETECT_PROMPT,
-      },
-      {
-        role: "user",
-        content: [
-          { type: "image_url", image_url: { url: dataUri } },
-          { type: "text", text: "Extract the garment attributes as JSON." },
-        ],
-      },
-    ],
-    max_tokens: 250,
-    temperature: 0.1,
-  };
-
-  log("POST", CF_API_URL);
-  const response = await fetch(CF_API_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${CF_API_TOKEN}` },
-    body: JSON.stringify(payload),
-  });
-
-  log("HTTP status:", response.status);
-  if (response.status !== 200) {
-    const text = await response.text();
-    log("ERROR: non-200 response body:", text.slice(0, 1000));
-    throw new Error(`Cloudflare detection failed (${response.status}): ${text.slice(0, 200)}`);
-  }
-
-  const result = await response.json();
-  log("Raw result keys:", Object.keys(result));
-  if (!result.success) {
-    const err = JSON.stringify(result.errors ?? []);
-    log("ERROR: Cloudflare success=false:", err);
-    throw new Error(`Cloudflare error: ${err}`);
-  }
-
-  const rawResponse = result.result?.response;
-  log("Raw model response:", typeof rawResponse === "string" ? rawResponse : JSON.stringify(rawResponse));
-
-  const rawText =
-    typeof rawResponse === "string"
-      ? rawResponse
-      : typeof rawResponse?.content?.[0]?.text === "string"
-        ? rawResponse.content[0].text
-        : typeof rawResponse?.message === "string"
-          ? rawResponse.message
-          : JSON.stringify(rawResponse ?? {});
+  const rawText = await requestDetection(form);
+  log("Model response:", rawText);
 
   let parsed: any = {};
   try {

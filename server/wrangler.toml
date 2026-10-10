@@ -1,0 +1,20 @@
+name = "wardrobe-api"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[observability]
+enabled = true
+
+# Cloudflare Workers AI binding. Models are invoked through `env.AI.run`.
+[ai]
+binding = "AI"
+
+# D1/R2 are provisioned in a later PR (PR3b) once accounts are wired up.
+# [d1_databases]
+# binding = "DB"
+# database_name = "wardrobe"
+# database_id = "<uuid>"
+#
+# [[r2_buckets]]
+# binding = "ASSETS"
+# bucket_name = "wardrobe-assets"

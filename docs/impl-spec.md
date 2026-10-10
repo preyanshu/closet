@@ -52,12 +52,6 @@ render blank rows for the demo wardrobe.
 ## Deleted (confirmed dead)
 - `services/outfit-avatar.ts`, `services/background-removal.ts`, `components/garment-art.tsx`.
 
-## Deferred, not dropped
-- expo-sqlite repository + `wear_events`/`plans`/`feedback` tables → PR2 (done below).
-- Server-side Cloudflare processing (assets to R2, Workers AI attributes) → PR3.
-- Rules-first composition engine → PR4 (engine still the deterministic placeholder).
-- Wear-event capture wiring → PR6.
-
 ## PR2 — Local-first persistence (`expo-sqlite`)
 
 ### Storage layer
@@ -90,3 +84,35 @@ render blank rows for the demo wardrobe.
 - `app/_layout.tsx` gates the navigator until `isHydrated`, showing an "Opening your closet…"
   spinner over the themed canvas. Existing empty states (e.g. outfit library) cover the
   no-data case.
+
+## PR3 — Server-side AI (`server/` Worker + API client)
+
+### Worker (`server/`)
+- Hono app deployed via `wrangler` with a single Workers AI binding (`env.AI`). No account id
+  or API token is read from requests or bundled in the app.
+- `GET /health` → `{ ok }`.
+- `POST /v1/detect` — multipart `image` + optional `prompt`; runs
+  `@cf/meta/llama-3.2-11b-vision-instruct` and returns `{ text }` (raw model text, parsed
+  client-side by the existing normalizer).
+- `POST /v1/stage` — multipart `image` + optional `prompt`; runs
+  `@cf/black-forest-labs/flux-2-klein-4b` and returns `{ image }` (base64). `input_image_0` is
+  passed to the binding as a byte array.
+- Permissive CORS for web/dev. Own `package.json`, `tsconfig.json`, `wrangler.toml`,
+  `README.md`; excluded from the app's root `tsconfig` so app typecheck ignores it.
+
+### Client (`services/api/wardrobe-api.ts`)
+- Reads `EXPO_PUBLIC_WARDROBE_API_URL`. `isWardrobeApiConfigured()` gates the flows.
+  `requestDetection` / `requestStaging` POST multipart via `expo/fetch` and surface
+  `WardrobeApiError`.
+- `garment-detect.ts` and `garment-staging.ts` now downscale locally, upload the resized
+  `File`, and call the Worker. **No `EXPO_PUBLIC_CLOUDFLARE_*` usage remains in the app.**
+
+### Security / ops
+- The previously client-exposed CF token must be rotated and the `EXPO_PUBLIC_CLOUDFLARE_*`
+  vars removed from `.env`; replace with `EXPO_PUBLIC_WARDROBE_API_URL` pointing at the
+  deployed Worker. Auth/rate-limiting and D1/R2 bindings are deferred.
+
+## Deferred, not dropped (updated)
+- D1/R2 bindings + worker auth → later.
+- Rules-first composition engine → PR4.
+- Wear-event capture wiring → PR6.

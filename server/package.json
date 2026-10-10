@@ -1,0 +1,19 @@
+{
+  "name": "wardrobe-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker that proxies wardrobe AI (garment detection + staging) so provider credentials never reach the client.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261006.1",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.149.0"
+  }
+}
