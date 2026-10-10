@@ -7,7 +7,7 @@ import { BlurView } from "expo-blur";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import { router, Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { Text, View } from "react-native";
+import { ActivityIndicator, Text, View } from "react-native";
 import { useEffect } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -39,6 +39,16 @@ export default function RootLayout() {
 
 function RootNavigator() {
   const { dark, colors } = useWardrobeTheme();
+  const { isHydrated } = useCloset();
+  if (!isHydrated) {
+    return (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.canvas, gap: 14 }}>
+        <StatusBar style={dark ? "light" : "dark"} />
+        <ActivityIndicator color={colors.secondaryLabel} />
+        <Text style={{ fontSize: 13, fontWeight: "600", color: colors.secondaryLabel }}>Opening your closet…</Text>
+      </View>
+    );
+  }
   return (
     <>
         <StatusBar style={dark ? "light" : "dark"} />

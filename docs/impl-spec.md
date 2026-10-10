@@ -1,7 +1,12 @@
-# Implementation Specification — PR1: Domain Model & Taxonomy
+# Implementation Specification — Wardrobe Migration
 
-Decisions locked for PR1 of the wardrobe architecture migration
+Decisions locked across the wardrobe architecture migration
 (report: [`wardrobe-architecture-report.md`](./wardrobe-architecture-report.md)).
+Sections are appended per PR.
+
+## PR1 — Domain model & taxonomy
+
+Decisions locked for PR1 of the wardrobe architecture migration.
 
 ## Scope
 Introduce the durable domain model the backend repository and recommendation engine will
@@ -48,7 +53,40 @@ render blank rows for the demo wardrobe.
 - `services/outfit-avatar.ts`, `services/background-removal.ts`, `components/garment-art.tsx`.
 
 ## Deferred, not dropped
-- expo-sqlite repository + `wear_events`/`plans`/`feedback` tables → PR2.
+- expo-sqlite repository + `wear_events`/`plans`/`feedback` tables → PR2 (done below).
 - Server-side Cloudflare processing (assets to R2, Workers AI attributes) → PR3.
 - Rules-first composition engine → PR4 (engine still the deterministic placeholder).
 - Wear-event capture wiring → PR6.
+
+## PR2 — Local-first persistence (`expo-sqlite`)
+
+### Storage layer
+- `services/storage/database.ts` opens `wardrobe.db`, enables WAL + foreign keys, and runs
+  ordered `PRAGMA user_version` migrations. `getDatabase()` returns `null` on web or on any
+  open failure so the app degrades to in-memory state instead of crashing.
+- `services/storage/wardrobe-repository.ts` maps domain `Item`/`Outfit` to/from rows (nested
+  arrays/objects such as `secondaryColors`, `styleTags`, `aiAttributes`, `itemIds`, `items`,
+  `tags`, `metadata` stored as JSON text) and exposes `loadWardrobeSnapshot()` plus write
+  helpers.
+- Tables: `items`, `outfits`, `wear_events`, `plans`, `feedback_events`, `preferences`
+  (JSON key/value for `saved_look_ids`, `favorite_item_ids`, `style_preferences`).
+  `wear_events`/`plans`/`feedback_events` are created and have repositories now; their UI
+  capture wires up in PR6.
+
+### Seeding
+- On first run (empty `items`/`outfits`) the DB is seeded from `data/mock.ts`: the 18 wardrobe
+  items and the 7 demo albums (`source: "demo"`, `isDemo: true`), plus the default saved looks,
+  favorites, and style preferences. Native first-run output is identical to the old in-memory
+  state; later launches read the DB as source of truth.
+
+### State
+- `ClosetProvider` hydrates from `loadWardrobeSnapshot()` and exposes `isHydrated`. Writes
+  (`addItem`, `addMyLook`, `removeMyLook`, `toggleSavedLook`, `toggleFavorite`,
+  `setStylePreferences`) apply optimistically and persist write-through. `myLooks` excludes
+  demo albums (`isDemo`). Outfit-library demo cards still render from `mockOutfitAlbums`; moving
+  that to context is a later refactor.
+
+### UI parity
+- `app/_layout.tsx` gates the navigator until `isHydrated`, showing an "Opening your closet…"
+  spinner over the themed canvas. Existing empty states (e.g. outfit library) cover the
+  no-data case.
