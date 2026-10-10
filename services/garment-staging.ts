@@ -1,5 +1,6 @@
 import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import { File, Paths } from "expo-file-system";
+import { fetch as expoFetch } from "expo/fetch";
 
 const CF_ACCOUNT_ID = process.env.EXPO_PUBLIC_CLOUDFLARE_ACCOUNT_ID ?? "";
 const CF_API_TOKEN = process.env.EXPO_PUBLIC_CLOUDFLARE_API_TOKEN ?? "";
@@ -64,21 +65,20 @@ export async function stageGarment(uri: string): Promise<StagingResult> {
     try {
       log("Attempt", attempt + 1, "/", MAX_RETRIES);
       const form = new FormData();
-      const upload: any = {
-        uri: resized.uri,
-        name: "input.png",
-        type: "image/png",
-      };
-      log("Upload file descriptor:", upload);
-      form.append("input_image_0", upload);
+      // SDK 57's native FormData implementation no longer accepts React
+      // Native's legacy `{ uri, name, type }` descriptor. Expo File implements
+      // Blob and can be streamed by expo/fetch without loading a second base64
+      // copy of the image into JavaScript memory.
+      const upload = new File(resized.uri);
+      log("Upload file:", { name: upload.name, type: upload.type, size: upload.size });
+      form.append("input_image_0", upload as any);
       form.append("prompt", STAGING_PROMPT);
       form.append("width", "1024");
       form.append("height", "1024");
       form.append("guidance", "3.0");
-      form.append("steps", "10");
 
       log("POST", CF_API_URL);
-      const response = await fetch(CF_API_URL, {
+      const response = await expoFetch(CF_API_URL, {
         method: "POST",
         headers: { Authorization: `Bearer ${CF_API_TOKEN}` },
         body: form,
@@ -145,8 +145,22 @@ function base64ToBytes(b64: string): Uint8Array {
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return bytes;
   }
-  const base64 = Buffer.from(b64, "base64");
-  return new Uint8Array(base64.buffer, base64.byteOffset, base64.byteLength);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const clean = b64.replace(/=+$/, "");
+  const output: number[] = [];
+  let buffer = 0;
+  let bits = 0;
+  for (const character of clean) {
+    const value = alphabet.indexOf(character);
+    if (value < 0) continue;
+    buffer = (buffer << 6) | value;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output.push((buffer >> bits) & 0xff);
+    }
+  }
+  return Uint8Array.from(output);
 }
 
 function delay(ms: number) {

@@ -1,4 +1,4 @@
-import { Card, Screen, SectionHeader } from "@/components/ui";
+import { adaptiveColors, radius, Card, ModalHeader, Screen } from "@/components/ui";
 import { categoryLabels, type ClothingCategory } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
 import { SymbolView } from "expo-symbols";
@@ -35,13 +35,13 @@ export default function AnalyticsScreen() {
   const dominantPercent = totalValue > 0 ? Math.round((dominant.value / totalValue) * 100) : 0;
 
   return (
-    <Screen>
-      <SectionHeader eyebrow="Analytics" title="Wardrobe report" />
+    <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
+      <ModalHeader title="Wardrobe analytics" subtitle="See the value and wear of your closet." />
 
       <View style={{ borderRadius: 28, borderCurve: "continuous", overflow: "hidden", backgroundColor: "#0E0D0B", padding: 26, gap: 18, boxShadow: "0 24px 48px rgba(0, 0, 0, 0.2)" }}>
         <View style={{ gap: 5 }}>
           <Text style={{ fontSize: 11, fontWeight: "800", letterSpacing: 2.2, color: "rgba(255,253,243,0.45)", textTransform: "uppercase" }}>Total wardrobe value</Text>
-          <Text style={{ fontSize: 42, fontWeight: "800", color: "#FFFDF3", letterSpacing: -1.6, fontVariant: ["tabular-nums"] }}>{currency(totalValue)}</Text>
+          <Text style={{ fontSize: 42, fontWeight: "800", color: adaptiveColors.onAccent, letterSpacing: -1.6, fontVariant: ["tabular-nums"] }}>{currency(totalValue)}</Text>
           <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(255,253,243,0.55)" }}>{items.length} pieces · avg {currency(avgCPW, true)} per wear</Text>
         </View>
 
@@ -52,7 +52,7 @@ export default function AnalyticsScreen() {
             { label: "Idle value", value: currency(unwornValue), accent: false },
           ].map((stat) => (
             <View key={stat.label} style={{ flex: 1, gap: 2 }}>
-              <Text style={{ fontSize: 16, fontWeight: "800", color: stat.accent ? "#FFB340" : "#FFFDF3", letterSpacing: -0.3, fontVariant: ["tabular-nums"] }}>{stat.value}</Text>
+              <Text style={{ fontSize: 16, fontWeight: "800", color: stat.accent ? "#FFB340" : adaptiveColors.onAccent, letterSpacing: -0.3, fontVariant: ["tabular-nums"] }}>{stat.value}</Text>
               <Text style={{ fontSize: 9, fontWeight: "700", color: "rgba(255,253,243,0.4)", textTransform: "uppercase", letterSpacing: 0.8 }}>{stat.label}</Text>
             </View>
           ))}
@@ -62,22 +62,22 @@ export default function AnalyticsScreen() {
       <Card className="gap-5">
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <SymbolView name="chart.pie" tintColor="rgba(0,0,0,0.35)" style={{ width: 15, height: 15 }} />
-          <Text style={{ fontSize: 15, fontWeight: "800", color: "#000", letterSpacing: -0.3 }}>Value by category</Text>
+          <Text style={{ fontSize: 15, fontWeight: "800", color: adaptiveColors.label, letterSpacing: -0.3 }}>Value by category</Text>
         </View>
         <View style={{ alignItems: "center", gap: 18 }}>
           <View style={{ position: "relative", width: 168, height: 168 }}>
             <Donut size={168} segments={donutSegments} />
             <View style={{ position: "absolute", inset: 0, alignItems: "center", justifyContent: "center", gap: 2 }}>
-              <Text style={{ fontSize: 26, fontWeight: "800", color: "#000", letterSpacing: -1, fontVariant: ["tabular-nums"] }}>{dominantPercent}%</Text>
-              <Text style={{ fontSize: 11, fontWeight: "700", color: "rgba(0,0,0,0.4)", textTransform: "capitalize" }}>{categoryLabels[dominant.category]}</Text>
+              <Text style={{ fontSize: 26, fontWeight: "800", color: adaptiveColors.label, letterSpacing: -1, fontVariant: ["tabular-nums"] }}>{dominantPercent}%</Text>
+              <Text style={{ fontSize: 11, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "capitalize" }}>{categoryLabels[dominant.category]}</Text>
             </View>
           </View>
           <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 8 }}>
             {categoryStats.filter((s) => s.value > 0).map((stat) => (
               <View key={stat.category} style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                <View style={{ width: 8, height: 8, borderRadius: 999, backgroundColor: categoryColors[stat.category] }} />
-                <Text style={{ fontSize: 12, fontWeight: "600", color: "rgba(0,0,0,0.6)", textTransform: "capitalize" }}>{categoryLabels[stat.category]}</Text>
-                <Text style={{ fontSize: 12, fontWeight: "800", color: "#000", fontVariant: ["tabular-nums"] }}>{Math.round((stat.value / totalValue) * 100)}%</Text>
+                <View style={{ width: 8, height: 8, borderRadius: radius.pill, backgroundColor: categoryColors[stat.category] }} />
+                <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.secondaryLabel, textTransform: "capitalize" }}>{categoryLabels[stat.category]}</Text>
+                <Text style={{ fontSize: 12, fontWeight: "800", color: adaptiveColors.label, fontVariant: ["tabular-nums"] }}>{Math.round((stat.value / totalValue) * 100)}%</Text>
               </View>
             ))}
           </View>
@@ -88,9 +88,9 @@ export default function AnalyticsScreen() {
         <View style={{ borderRadius: 24, borderCurve: "continuous", backgroundColor: "#FFF4E0", padding: 20, gap: 6 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             <SymbolView name="exclamationmark.triangle.fill" tintColor="#FF9500" style={{ width: 18, height: 18 }} />
-            <Text style={{ fontSize: 15, fontWeight: "800", color: "#000" }}>{unworn.length} {unworn.length === 1 ? "piece" : "pieces"} never worn</Text>
+            <Text style={{ fontSize: 15, fontWeight: "800", color: adaptiveColors.label }}>{unworn.length} {unworn.length === 1 ? "piece" : "pieces"} never worn</Text>
           </View>
-          <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.55)", lineHeight: 19 }}>{currency(unwornValue)} sitting idle. Style them next, or sell, swap, or donate.</Text>
+          <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel, lineHeight: 19 }}>{currency(unwornValue)} sitting idle. Style them next, or sell, swap, or donate.</Text>
         </View>
       )}
     </Screen>

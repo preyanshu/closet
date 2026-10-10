@@ -19,6 +19,8 @@ export type Aesthetic = {
 };
 
 export type Outfit = {
+  previewUri?: string;
+  metadata?: { occasion: string; season: string; palette: string; stylingNote: string; demo?: boolean };
   id: string;
   label: string;
   itemIds: string[];

@@ -1,4 +1,4 @@
-import { GlassLayer } from "@/components/ui";
+import { adaptiveColors, radius, GlassButton, GlassLayer, ModalHeader } from "@/components/ui";
 import { SymbolView } from "expo-symbols";
 import { useState, useRef, useEffect } from "react";
 import {
@@ -53,8 +53,11 @@ export default function ChatScreen() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
-      style={{ flex: 1, backgroundColor: "#FFFDF3" }}
+      style={{ flex: 1, backgroundColor: adaptiveColors.canvas }}
     >
+      <View style={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 }}>
+        <ModalHeader title="Ask Alta" subtitle="Get help styling your closet." />
+      </View>
       <ScrollView
         ref={scrollRef}
         contentContainerStyle={{ padding: 20, paddingBottom: 12, gap: 14 }}
@@ -75,10 +78,10 @@ export default function ChatScreen() {
               style={{
                 paddingHorizontal: 16,
                 paddingVertical: 10,
-                borderRadius: 999,
+                borderRadius: radius.pill,
                 backgroundColor: "rgba(0,0,0,0.04)",
                 borderWidth: 1,
-                borderColor: "rgba(0,0,0,0.06)",
+                borderColor: adaptiveColors.border,
               }}
             >
               <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.58)" }}>{reply}</Text>
@@ -96,7 +99,7 @@ export default function ChatScreen() {
           paddingVertical: 12,
           borderTopWidth: 1,
           borderTopColor: "rgba(0,0,0,0.06)",
-          backgroundColor: "#FFFDF3",
+          backgroundColor: adaptiveColors.canvas,
         }}
       >
         <TextInput
@@ -110,13 +113,13 @@ export default function ChatScreen() {
             flex: 1,
             fontSize: 15,
             fontWeight: "500",
-            color: "#000",
+            color: adaptiveColors.label,
             backgroundColor: "rgba(0,0,0,0.03)",
-            borderRadius: 999,
+            borderRadius: radius.pill,
             paddingHorizontal: 18,
             paddingVertical: 12,
             borderWidth: 1,
-            borderColor: "rgba(0,0,0,0.06)",
+            borderColor: adaptiveColors.border,
           }}
         />
         <SendButton onPress={() => send()} disabled={!input.trim()} />
@@ -142,7 +145,7 @@ function Bubble({ role, text }: { role: "user" | "alta"; text: string }) {
           borderRadius: 20,
           borderBottomRightRadius: isAlta ? 20 : 6,
           borderBottomLeftRadius: isAlta ? 6 : 20,
-          backgroundColor: isAlta ? "rgba(0,0,0,0.04)" : "#000",
+          backgroundColor: isAlta ? "rgba(0,0,0,0.04)" : adaptiveColors.label,
           overflow: "hidden",
         }}
       >
@@ -152,7 +155,7 @@ function Bubble({ role, text }: { role: "user" | "alta"; text: string }) {
             fontSize: 15,
             lineHeight: 21,
             fontWeight: "500",
-            color: isAlta ? "#000" : "#FFFDF3",
+            color: isAlta ? adaptiveColors.label : adaptiveColors.onAccent,
           }}
         >
           {text}
@@ -163,29 +166,7 @@ function Bubble({ role, text }: { role: "user" | "alta"; text: string }) {
 }
 
 function SendButton({ onPress, disabled }: { onPress: () => void; disabled: boolean }) {
-  return (
-    <Pressable
-      accessibilityLabel="Send message"
-      onPress={onPress}
-      disabled={disabled}
-      style={{
-        width: 42,
-        height: 42,
-        borderRadius: 999,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: disabled ? "rgba(0,0,0,0.04)" : "#000",
-        overflow: "hidden",
-      }}
-    >
-      {!disabled && <GlassLayer tintColor="#000000" />}
-      <SymbolView
-        name="arrow.up"
-        tintColor={disabled ? "rgba(0,0,0,0.2)" : "#FFFDF3"}
-        style={{ width: 18, height: 18 }}
-      />
-    </Pressable>
-  );
+  return <GlassButton icon="arrow.up" label="Send message" onPress={onPress} disabled={disabled} variant="dark" />;
 }
 
 function getAltaResponse(input: string): string {

@@ -1,4 +1,4 @@
-import { Avatar, Card, GlassButton, Screen, SectionHeader } from "@/components/ui";
+import { adaptiveColors, radius, Avatar, Card, GlassButton, Screen, SectionHeader } from "@/components/ui";
 import { useCloset } from "@/state/closet-context";
 import { SymbolView } from "expo-symbols";
 import * as Haptics from "expo-haptics";
@@ -34,8 +34,8 @@ export default function ProfileScreen() {
       <Card className="flex-row items-center gap-4">
         <Avatar initials="PW" />
         <View className="flex-1 gap-1">
-          <Text className="text-xl font-bold text-black">Preyanshu</Text>
-          <Text className="text-sm text-black/58">{stylePreferences.length} styles selected</Text>
+          <Text className="text-xl font-bold text-black dark:text-[#FFF9ED]">Preyanshu</Text>
+          <Text className="text-sm text-black/58 dark:text-white/58">{stylePreferences.length} styles selected</Text>
         </View>
         <GlassButton icon="pencil" label="Edit profile" size={36} onPress={() => {}} />
       </Card>
@@ -43,16 +43,23 @@ export default function ProfileScreen() {
       {stylePreferences.length > 0 && (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           {stylePreferences.map((pref) => (
-            <View key={pref} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999, backgroundColor: "#000" }}>
-              <Text style={{ fontSize: 12, fontWeight: "600", color: "#FFFDF3", textTransform: "capitalize" }}>{pref}</Text>
+            <View key={pref} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.pill, backgroundColor: adaptiveColors.label }}>
+              <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.onAccent, textTransform: "capitalize" }}>{pref}</Text>
             </View>
           ))}
         </View>
       )}
 
+      <Card className="gap-3">
+        <View style={{ gap: 3 }}>
+          <Text style={{ fontSize: 12, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5 }}>Appearance</Text>
+          <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>Light</Text>
+        </View>
+      </Card>
+
       {settingsGroups.map((group) => (
         <Card key={group.title} className="gap-1">
-          <Text style={{ fontSize: 12, fontWeight: "700", color: "rgba(0,0,0,0.35)", textTransform: "uppercase", letterSpacing: 1.5, paddingVertical: 8, paddingHorizontal: 4 }}>{group.title}</Text>
+          <Text style={{ fontSize: 12, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5, paddingVertical: 8, paddingHorizontal: 4 }}>{group.title}</Text>
           {group.rows.map((row) => (
             <Pressable
               key={row.id}
@@ -62,10 +69,10 @@ export default function ProfileScreen() {
               }}
               style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.06)" }}
             >
-              <View style={{ width: 32, height: 32, borderRadius: 999, backgroundColor: "rgba(0,0,0,0.04)", alignItems: "center", justifyContent: "center" }}>
+              <View style={{ width: 32, height: 32, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.04)", alignItems: "center", justifyContent: "center" }}>
                 <SymbolView name={row.icon} tintColor="rgba(0,0,0,0.4)" style={{ width: 16, height: 16 }} />
               </View>
-              <Text style={{ flex: 1, fontSize: 15, fontWeight: "500", color: "#000" }}>{row.label}</Text>
+              <Text style={{ flex: 1, fontSize: 15, fontWeight: "500", color: adaptiveColors.label }}>{row.label}</Text>
               <SymbolView name="chevron.right" tintColor="rgba(0,0,0,0.25)" style={{ width: 16, height: 16 }} />
             </Pressable>
           ))}
@@ -73,8 +80,8 @@ export default function ProfileScreen() {
       ))}
 
       <Card>
-        <Text style={{ fontSize: 13, lineHeight: 20, color: "rgba(0,0,0,0.45)" }}>
-          No auth, persistence, backend, or AI is connected in this phase. The app is fully powered by local mock data and simulated outfit logic.
+        <Text style={{ fontSize: 13, lineHeight: 20, color: adaptiveColors.secondaryLabel }}>
+          Scanned pieces are analyzed and staged with AI. Account sync and persistent cloud storage are not connected yet, so closet changes remain on this device session.
         </Text>
       </Card>
     </Screen>

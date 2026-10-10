@@ -1,4 +1,4 @@
-import { GlassButton, SectionHeader } from "@/components/ui";
+import { adaptiveColors, radius, GlassButton, Screen, SectionHeader, Sheet, WardrobeIcon } from "@/components/ui";
 import { clothingItems, mockOutfitAlbums, type ClothingItem, type Outfit } from "@/data/mock";
 import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
@@ -6,7 +6,7 @@ import { Image } from "expo-image";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { useMemo, useState } from "react";
-import { Modal, Pressable, ScrollView, Text, useWindowDimensions, View } from "react-native";
+import { Pressable, ScrollView, Text, useWindowDimensions, View } from "react-native";
 
 const calendarColumns = 7;
 const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -42,7 +42,7 @@ export default function PlanScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#FFFDF3" }}>
+    <Screen scroll={false}>
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ gap: 24, paddingHorizontal: 24, paddingBottom: 140, paddingTop: 28 }}>
         <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
           <SectionHeader eyebrow="Plan" title="Style calendar" />
@@ -52,7 +52,7 @@ export default function PlanScreen() {
           </View>
         </View>
 
-        <View style={{ flexDirection: "row", gap: 28, borderBottomWidth: 1, borderColor: "rgba(0,0,0,0.06)", paddingBottom: 18 }}>
+        <View style={{ flexDirection: "row", gap: 28, borderBottomWidth: 1, borderColor: adaptiveColors.border, paddingBottom: 18 }}>
           <MiniInsight title="Most worn" value="Cream knit polo" imageUrl={clothingItems[2].imageUrl} />
           <MiniInsight title="Closet usage" value="0%" />
         </View>
@@ -60,8 +60,8 @@ export default function PlanScreen() {
         <View style={{ gap: 18 }}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <View style={{ gap: 2 }}>
-              <Text style={{ fontSize: 18, fontWeight: "800", color: "#000000" }}>{monthLabel}</Text>
-              <Text style={{ fontSize: 12, fontWeight: "600", color: "rgba(0,0,0,0.38)" }}>Tap a day to plan a look</Text>
+              <Text style={{ fontSize: 18, fontWeight: "800", color: adaptiveColors.label }}>{monthLabel}</Text>
+              <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>Tap a day to plan a look</Text>
             </View>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <GlassButton icon="chevron.left" label="Previous month" onPress={() => moveMonth(-1)} size={36} />
@@ -72,11 +72,11 @@ export default function PlanScreen() {
           <View
             style={{
               gap: 12,
-              backgroundColor: "#FFFFFA",
+              backgroundColor: adaptiveColors.surface,
               borderRadius: 28,
               borderCurve: "continuous",
               borderWidth: 1,
-              borderColor: "rgba(0,0,0,0.06)",
+              borderColor: adaptiveColors.border,
               paddingVertical: 14,
               paddingHorizontal: 6,
               boxShadow: "0 14px 36px rgba(0,0,0,0.045)",
@@ -118,8 +118,8 @@ export default function PlanScreen() {
                         onPress={() => cell.day && setSelectedDay(cell.day)}
                         style={{ height: 26, alignItems: "center", justifyContent: "center" }}
                       >
-                        <View style={{ width: 26, height: 26, borderRadius: 999, alignItems: "center", justifyContent: "center", backgroundColor: isToday ? "#000000" : "transparent" }}>
-                          <Text style={{ fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"], color: isToday ? "#FFFDF3" : isSelected ? "#000000" : "rgba(0,0,0,0.38)" }}>
+                        <View style={{ width: 26, height: 26, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: isToday ? adaptiveColors.label : "transparent" }}>
+                          <Text style={{ fontSize: 11, fontWeight: "800", fontVariant: ["tabular-nums"], color: isToday ? adaptiveColors.onAccent : isSelected ? adaptiveColors.label : "rgba(0,0,0,0.38)" }}>
                             {cell.day ?? ""}
                           </Text>
                         </View>
@@ -130,7 +130,7 @@ export default function PlanScreen() {
                           <Pressable
                             accessibilityLabel={`Select ${monthLabel} ${cell.day}`}
                             onPress={() => cell.day && setSelectedDay(cell.day)}
-                            style={{ flex: 1, width: "86%", marginTop: 6, borderRadius: 10, overflow: "hidden", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "rgba(0,0,0,0.07)" }}
+                            style={{ flex: 1, width: "86%", marginTop: 6, borderRadius: 10, overflow: "hidden", backgroundColor: adaptiveColors.surfaceRaised, borderWidth: 1, borderColor: adaptiveColors.border }}
                           >
                             <Image source={require("@/assets/look-preview.png")} contentFit="contain" style={{ width: "100%", height: "100%" }} />
                           </Pressable>
@@ -141,9 +141,9 @@ export default function PlanScreen() {
                               setSelectedDay(cell.day!);
                               setPickerDay(cell.day);
                             }}
-                            style={{ flex: 1, width: "86%", marginTop: 6, borderRadius: 10, borderWidth: 1, borderStyle: "dashed", borderColor: "rgba(0,0,0,0.11)", alignItems: "center", justifyContent: "center" }}
+                            style={{ flex: 1, width: "86%", marginTop: 6, borderRadius: 10, borderWidth: 1, borderStyle: "dashed", borderColor: adaptiveColors.border, alignItems: "center", justifyContent: "center" }}
                           >
-                            <SymbolView name="plus" tintColor="rgba(0,0,0,0.26)" style={{ width: 12, height: 12 }} />
+                            <WardrobeIcon name="plus" color={adaptiveColors.tertiaryLabel} size={12} />
                           </Pressable>
                         )
                       ) : (
@@ -172,7 +172,7 @@ export default function PlanScreen() {
           setPickerDay(null);
         }}
       />
-    </View>
+    </Screen>
   );
 }
 
@@ -192,17 +192,7 @@ function OutfitPickerSheet({
   onSelect: (outfit: Outfit) => void;
 }) {
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "#FFFDF3" }}>
-        <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ gap: 20, paddingHorizontal: 24, paddingBottom: 80, paddingTop: 18 }}>
-          <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-            <View style={{ flex: 1, gap: 4 }}>
-              <Text style={{ fontSize: 26, fontWeight: "800", color: "#000000", letterSpacing: -0.7 }}>Choose outfit</Text>
-              <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.42)" }}>{dateLabel}</Text>
-            </View>
-            <GlassButton icon="xmark" label="Close outfit picker" onPress={onClose} size={44} />
-          </View>
-
+    <Sheet visible={visible} onDismiss={onClose} title="Choose outfit" subtitle={dateLabel}>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14 }}>
             {outfits.map((outfit) => {
               const outfitItems = outfit.itemIds
@@ -211,20 +201,18 @@ function OutfitPickerSheet({
 
               return (
                 <Pressable key={outfit.id} accessibilityLabel={`Select ${outfit.label}`} onPress={() => onSelect(outfit)} style={{ width: "47%", gap: 8 }}>
-                  <View style={{ aspectRatio: 1, borderRadius: 18, backgroundColor: "#FFFFFF", overflow: "hidden", borderWidth: 1, borderColor: "rgba(0,0,0,0.07)" }}>
+                  <View style={{ aspectRatio: 1, borderRadius: 18, backgroundColor: adaptiveColors.surfaceRaised, overflow: "hidden", borderWidth: 1, borderColor: adaptiveColors.border }}>
                     <Image source={require("@/assets/look-preview.png")} contentFit="contain" style={{ width: "100%", height: "100%" }} />
                   </View>
                   <View style={{ gap: 3, paddingHorizontal: 2 }}>
-                    <Text numberOfLines={1} style={{ fontSize: 14, fontWeight: "800", color: "#000000" }}>{outfit.label}</Text>
-                    <Text style={{ fontSize: 11, fontWeight: "700", color: "rgba(0,0,0,0.38)" }}>{outfitItems.length} pieces</Text>
+                    <Text numberOfLines={1} style={{ fontSize: 14, fontWeight: "800", color: adaptiveColors.label }}>{outfit.label}</Text>
+                    <Text style={{ fontSize: 11, fontWeight: "700", color: adaptiveColors.secondaryLabel }}>{outfitItems.length} pieces</Text>
                   </View>
                 </Pressable>
               );
             })}
           </View>
-        </ScrollView>
-      </View>
-    </Modal>
+    </Sheet>
   );
 }
 
@@ -235,10 +223,10 @@ function MiniInsight({ title, value, imageUrl }: { title: string; value: string;
       {imageUrl ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <Image source={getItemImageSource(imageUrl)} contentFit="contain" style={{ width: 34, height: 34 }} />
-          <Text numberOfLines={2} style={{ flex: 1, fontSize: 13, fontWeight: "800", color: "#000000" }}>{value}</Text>
+          <Text numberOfLines={2} style={{ flex: 1, fontSize: 13, fontWeight: "800", color: adaptiveColors.label }}>{value}</Text>
         </View>
       ) : (
-        <Text style={{ fontSize: 22, fontWeight: "800", color: "#000000" }}>{value}</Text>
+        <Text style={{ fontSize: 22, fontWeight: "800", color: adaptiveColors.label }}>{value}</Text>
       )}
     </View>
   );

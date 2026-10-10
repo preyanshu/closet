@@ -1,20 +1,19 @@
-import { Button, GlassButton, ItemImage } from "@/components/ui";
+import { adaptiveColors, radius, spacing, Button, CircularGlassButton as GlassButton, GlassLayer, ItemImage, NativeSwitch, Screen, SelectionRow, Sheet, WardrobeIcon } from "@/components/ui";
 import { aesthetics, categoryLabels, type ClothingCategory, type ClothingItem } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
-import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { type ComponentProps } from "react";
 import { useState } from "react";
-import { Modal, Pressable, ScrollView, Switch, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 type SymbolName = ComponentProps<typeof SymbolView>["name"];
 type QuickFilter = "all" | "favorites" | "unworn";
 type SortKey = "recent" | "costPerWear" | "mostWorn" | "price" | "name";
 type LayoutMode = "cards" | "gallery";
 
-const cardImagePadding = 23;
+const cardImagePadding = 12;
 
 const categoryFilters: Array<ClothingCategory | "all"> = ["all", "top", "bottom", "outerwear", "shoes", "accessory"];
 const colorOptions = ["black", "white", "navy", "gray", "brown", "cream", "blue", "camel"];
@@ -32,14 +31,6 @@ const sortOptions: Array<{ id: SortKey; label: string; subtitle: string; icon: S
   { id: "price", label: "Price", subtitle: "Highest first", icon: "tag" },
   { id: "name", label: "Name", subtitle: "A to Z", icon: "textformat.abc" },
 ];
-
-const categoryIcons: Record<ClothingCategory, SymbolName> = {
-  top: "tshirt",
-  bottom: "rectangle.split.2x1",
-  outerwear: "jacket",
-  shoes: "shoe",
-  accessory: "bag",
-};
 
 const swatchColor = (color: string) => {
   const map: Record<string, string> = { white: "#F5F1E8", ivory: "#F3EAD9", cream: "#EFE3CB", navy: "#1F2A44", charcoal: "#3A3A3A", camel: "#C08A4E", brown: "#6B4A2F", gray: "#8E8E93", blue: "#3B6EA8", black: "#0E0D0B" };
@@ -63,7 +54,6 @@ const formatCostPerWear = (item: ClothingItem) => {
 };
 
 export default function ClosetScreen() {
-  const { width } = useWindowDimensions();
   const { items, isFavorite, toggleFavorite } = useCloset();
   const [category, setCategory] = useState<ClothingCategory | "all">("all");
   const [quick, setQuick] = useState<QuickFilter>("all");
@@ -75,12 +65,16 @@ export default function ClosetScreen() {
   const [sortKey, setSortKey] = useState<SortKey>("recent");
   const [showSort, setShowSort] = useState(false);
   const [layout, setLayout] = useState<LayoutMode>("cards");
+  const [galleryWidth, setGalleryWidth] = useState(0);
+  const [pressedGalleryId, setPressedGalleryId] = useState<string | null>(null);
+  const galleryGap = spacing.xs;
+  const galleryColumnWidth = galleryWidth > 0
+    ? Math.floor((galleryWidth - galleryGap * 2) / 3)
+    : "31%";
 
-  const itemWidth = Math.floor((width - 40 - 10) / 2);
-  const galleryItemWidth = Math.floor((width - 40 - 6) / 3);
   const favoritesCount = items.filter((item) => isFavorite(item.id)).length;
   const unwornCount = items.filter((item) => !item.lastWorn).length;
-  const activeFilterCount = selectedColors.length + selectedSeasons.length + (aestheticId === "all" ? 0 : 1);
+  const activeFilterCount = selectedColors.length + selectedSeasons.length + (aestheticId === "all" ? 0 : 1) + (quick === "all" ? 0 : 1);
 
   const categoryCounts = items.reduce<Record<string, number>>((counts, item) => {
     counts[item.category] = (counts[item.category] ?? 0) + 1;
@@ -132,60 +126,41 @@ export default function ClosetScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#FFFDF3" }}>
-      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ gap: 24, paddingHorizontal: 20, paddingBottom: 160, paddingTop: 28 }}>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+    <Screen scroll={false}>
+      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ flexGrow: 1, gap: spacing.xl, paddingHorizontal: spacing.lg, paddingBottom: 160, paddingTop: spacing.xl }}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <View style={{ gap: 3, flex: 1 }}>
-            <Text style={{ fontSize: 11, fontWeight: "800", letterSpacing: 2, color: "rgba(0,0,0,0.4)", textTransform: "uppercase" }}>Digital wardrobe</Text>
-            <Text style={{ fontSize: 36, fontWeight: "800", letterSpacing: -1.4, color: "#000", lineHeight: 40 }}>Closet</Text>
-            <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.45)" }}>
-              {items.length} {items.length === 1 ? "piece" : "pieces"} · {unwornCount} never worn
+            <Text style={{ fontSize: 11, fontWeight: "800", letterSpacing: 2, color: adaptiveColors.secondaryLabel, textTransform: "uppercase" }}>Digital wardrobe</Text>
+            <Text style={{ fontSize: 36, fontWeight: "800", letterSpacing: -1.4, color: adaptiveColors.label, lineHeight: 40 }}>Closet</Text>
+            <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>
+              {items.length === 0 ? "A little space for everything you wear." : `${items.length} ${items.length === 1 ? "piece" : "pieces"} · ${unwornCount} never worn`}
             </Text>
           </View>
-          <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
-            <GlassButton icon="chart.line.uptrend.xyaxis" label="Wardrobe analytics" onPress={() => router.push("/analytics")} />
-            <GlassButton icon="plus" label="Scan clothes" variant="dark" onPress={() => router.push("/scan")} />
+          <View style={{ flexDirection: "row", gap: spacing.xs, marginTop: 4 }}>
+            {items.length > 0 ? <GlassButton icon="chart.line.uptrend.xyaxis" label="Wardrobe analytics" onPress={() => router.push("/analytics")} /> : null}
+            <GlassButton icon="plus" label="Scan clothes" onPress={() => router.push("/scan")} />
           </View>
         </View>
 
-        <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-          <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8, height: 44, borderRadius: 999, backgroundColor: "rgba(0,0,0,0.045)", borderWidth: 1, borderColor: "rgba(0,0,0,0.05)", paddingHorizontal: 16 }}>
-            <SymbolView name="magnifyingglass" tintColor="rgba(0,0,0,0.3)" size={16} />
-            <TextInput value={search} onChangeText={setSearch} placeholder="Search pieces..." placeholderTextColor="rgba(0,0,0,0.3)" style={{ flex: 1, fontSize: 15, fontWeight: "500", color: "#000" }} returnKeyType="search" />
+        {items.length > 0 ? <>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <View style={{ flex: 1, flexDirection: "row", alignItems: "center", height: 48, borderRadius: radius.pill, borderCurve: "continuous", overflow: "hidden", backgroundColor: adaptiveColors.surface, borderWidth: 1, borderColor: adaptiveColors.border, paddingLeft: 16, paddingRight: 6 }}>
+            <GlassLayer />
+            <WardrobeIcon name="magnifyingglass" color={adaptiveColors.tertiaryLabel} size={16} />
+            <TextInput value={search} onChangeText={setSearch} placeholder="Search pieces" placeholderTextColor={adaptiveColors.tertiaryLabel} style={{ flex: 1, height: 48, paddingHorizontal: 11, fontSize: 15, fontWeight: "500", includeFontPadding: false, color: adaptiveColors.label }} returnKeyType="search" />
             {search.length > 0 ? (
-              <Pressable onPress={() => setSearch("")} hitSlop={8} accessibilityLabel="Clear search">
-                <SymbolView name="xmark.circle.fill" tintColor="rgba(0,0,0,0.25)" size={16} />
-              </Pressable>
+              <GlassButton icon="xmark" size={36} label="Clear search" onPress={() => setSearch("")} />
             ) : null}
-          </View>
-          <GlassButton
-            icon="slider.horizontal.3"
-            label="Filters"
-            variant={activeFilterCount > 0 ? "dark" : "light"}
-            onPress={() => setShowFilters(true)}
-          />
+        </View>
+        <GlassButton icon="slider.horizontal.3" label={`Filters${activeFilterCount ? `, ${activeFilterCount} active` : ""}`} badge={activeFilterCount > 0} tintColor={activeFilterCount ? adaptiveColors.accent : adaptiveColors.label} onPress={() => setShowFilters(true)} />
         </View>
 
-        <SegmentedControl
-          values={["All", "Favorites", "Unworn"]}
-          selectedIndex={quick === "all" ? 0 : quick === "favorites" ? 1 : 2}
-          onChange={(event) => {
-            const index = event.nativeEvent.selectedSegmentIndex;
-            setQuick(index === 0 ? "all" : index === 1 ? "favorites" : "unworn");
-          }}
-          tintColor="#000000"
-          backgroundColor="rgba(0,0,0,0.05)"
-          fontStyle={{ color: "rgba(0,0,0,0.5)", fontSize: 13, fontWeight: "600" }}
-          activeFontStyle={{ color: "#FFFDF3", fontSize: 13, fontWeight: "700" }}
-        />
-
-        <View style={{ marginHorizontal: -20 }}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 20 }}>
+        <View style={{ marginHorizontal: -spacing.lg }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.lg, paddingVertical: 2 }}>
             {categoryFilters.map((filter) => (
               <Chip
                 key={filter}
                 label={filter === "all" ? "All" : categoryLabels[filter]}
-                icon={filter === "all" ? undefined : categoryIcons[filter]}
                 count={categoryCounts[filter] ?? 0}
                 selected={category === filter}
                 onPress={() => setCategory(filter)}
@@ -194,49 +169,59 @@ export default function ClosetScreen() {
           </ScrollView>
         </View>
 
-        <ClosetInsights items={items} />
-
-        <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8 }}>
-          <Chip
-            label={layout === "cards" ? "Cards" : "Gallery"}
-            icon={layout === "cards" ? "square.grid.2x2" : "rectangle.grid.1x2"}
-            selected
-            onPress={() => setLayout((prev) => (prev === "cards" ? "gallery" : "cards"))}
-          />
-          <Chip label={activeSort.label} icon="arrow.up.arrow.down" selected={sortKey !== "recent"} onPress={() => setShowSort(true)} />
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <Text style={{ fontSize: 13, lineHeight: 18, fontWeight: "700", color: adaptiveColors.secondaryLabel, fontVariant: ["tabular-nums"] }}>{sortedItems.length} pieces</Text>
+          <View style={{ flexDirection: "row", gap: spacing.xs }}>
+            <GlassButton
+              icon={layout === "cards" ? "square.grid.2x2" : "rectangle.grid.1x2"}
+              label={`Switch to ${layout === "cards" ? "gallery" : "card"} view`}
+              onPress={() => setLayout((prev) => (prev === "cards" ? "gallery" : "cards"))}
+            />
+            <GlassButton icon="arrow.up.arrow.down" label={`Sort pieces, ${activeSort.label}`} onPress={() => setShowSort(true)} />
+          </View>
         </View>
 
-        {sortedItems.length === 0 ? (
+        </> : null}
+
+        {items.length === 0 ? <NewClosetState /> : sortedItems.length === 0 ? (
           <EmptyState onClear={clearAllFilters} />
         ) : layout === "gallery" ? (
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 3 }}>
+          <View
+            onLayout={(event) => setGalleryWidth(event.nativeEvent.layout.width)}
+            style={{ width: "100%", flexDirection: "row", flexWrap: "wrap", columnGap: galleryGap, rowGap: galleryGap }}
+          >
             {sortedItems.map((item) => {
               const favorite = isFavorite(item.id);
               return (
-                <Pressable key={item.id} accessibilityLabel={`Open ${item.name}`} onPress={() => router.push(`/item/${item.id}`)} style={{ width: galleryItemWidth }}>
+                <Pressable
+                  key={item.id}
+                  accessibilityLabel={`Open ${item.name}`}
+                  onPress={() => router.push(`/item/${item.id}`)}
+                  onPressIn={() => setPressedGalleryId(item.id)}
+                  onPressOut={() => setPressedGalleryId(null)}
+                  style={{
+                    width: galleryColumnWidth,
+                    flexGrow: 0,
+                    flexShrink: 0,
+                    transform: [{ scale: pressedGalleryId === item.id ? 0.96 : 1 }],
+                  }}
+                >
                   <View style={{ position: "relative" }}>
                     <ItemImage imageUrl={item.imageUrl} label={item.name} style={{ aspectRatio: 1, borderRadius: 8 }} />
-                    <Pressable
-                      accessibilityLabel={favorite ? "Remove from favorites" : "Add to favorites"}
-                      hitSlop={8}
-                      onPress={(event) => {
-                        event.stopPropagation();
+                    <View style={{ position: "absolute", top: 4, right: 4 }}>
+                    <GlassButton
+                      icon={favorite ? "heart.fill" : "heart"}
+                      label={favorite ? "Remove from favorites" : "Add to favorites"}
+                      selected={favorite}
+                      size={36}
+                      tintColor={favorite ? adaptiveColors.destructive : adaptiveColors.label}
+                      onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                         toggleFavorite(item.id);
                       }}
-                      style={{
-                        position: "absolute",
-                        top: 4,
-                        right: 4,
-                        width: 26,
-                        height: 26,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <SymbolView name={favorite ? "heart.fill" : "heart"} tintColor={favorite ? "#FF3B30" : "#000000"} size={13} />
-                    </Pressable>
-                    <View style={{ position: "absolute", left: 4, bottom: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 999, backgroundColor: "rgba(0,0,0,0.55)" }}>
+                    />
+                    </View>
+                    <View style={{ position: "absolute", left: 4, bottom: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.55)" }}>
                       <Text style={{ fontSize: 9, fontWeight: "800", color: "#FFF", fontVariant: ["tabular-nums"] }}>
                         {item.wearCount === 0 ? "Unworn" : `${formatCostPerWear(item)}/wear`}
                       </Text>
@@ -247,7 +232,7 @@ export default function ClosetScreen() {
             })}
           </View>
         ) : (
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: spacing.sm }}>
             {sortedItems.map((item) => {
               const favorite = isFavorite(item.id);
               return (
@@ -256,48 +241,41 @@ export default function ClosetScreen() {
                   accessibilityLabel={`Open ${item.name}`}
                   onPress={() => router.push(`/item/${item.id}`)}
                   style={{
-                    width: itemWidth,
+                    width: "48%",
+                    flexGrow: 0,
+                    flexShrink: 0,
                     paddingTop: cardImagePadding,
                     paddingHorizontal: cardImagePadding,
-                    borderRadius: 20,
+                    paddingBottom: 8,
+                    borderRadius: 22,
                     borderCurve: "continuous",
                     overflow: "hidden",
-                    backgroundColor: "#FFFFFA",
+                    backgroundColor: adaptiveColors.surface,
                     borderWidth: 1,
-                    borderColor: "rgba(0,0,0,0.06)",
-                    boxShadow: "0 8px 20px rgba(0,0,0,0.05)",
+                    borderColor: adaptiveColors.border,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.045)",
                   }}
                 >
-                  <View style={{ flex: 1, position: "relative" }}>
+                  <View style={{ position: "relative" }}>
                     <ItemImage
                       imageUrl={item.imageUrl}
                       label={item.name}
-                      style={{ width: "100%", height: "100%", borderRadius: 12 }}
+                      style={{ width: "100%", aspectRatio: 1, borderRadius: 12 }}
                     />
-                    <Pressable
-                      accessibilityLabel={favorite ? "Remove from favorites" : "Add to favorites"}
-                      hitSlop={8}
-                      onPress={(event) => {
-                        event.stopPropagation();
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        toggleFavorite(item.id);
-                      }}
-                      style={{
-                        position: "absolute",
-                        top: 8,
-                        right: 8,
-                        width: 28,
-                        height: 28,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <SymbolView name={favorite ? "heart.fill" : "heart"} tintColor={favorite ? "#FF3B30" : "#000000"} size={15} />
-                    </Pressable>
+                    <View style={{ position: "absolute", top: 4, right: 4 }}>
+                      <GlassButton
+                        icon={favorite ? "heart.fill" : "heart"}
+                        label={favorite ? "Remove from favorites" : "Add to favorites"}
+                        selected={favorite}
+                        tintColor={favorite ? adaptiveColors.destructive : adaptiveColors.label}
+                        size={36}
+                        onPress={() => toggleFavorite(item.id)}
+                      />
+                    </View>
                   </View>
-                  <View style={{ height: 46, paddingHorizontal: 10, justifyContent: "center", gap: 1 }}>
-                    <Text numberOfLines={1} style={{ fontSize: 12, fontWeight: "800", color: "#000", letterSpacing: -0.2 }}>{item.name}</Text>
-                    <Text numberOfLines={1} style={{ fontSize: 10, fontWeight: "600", color: "rgba(0,0,0,0.45)", fontVariant: ["tabular-nums"] }}>
+                  <View style={{ minHeight: 48, paddingHorizontal: 4, paddingTop: 10, justifyContent: "center", gap: 2 }}>
+                    <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 17, fontWeight: "700", includeFontPadding: false, color: adaptiveColors.label, letterSpacing: -0.1 }}>{item.name}</Text>
+                    <Text numberOfLines={1} style={{ fontSize: 11, lineHeight: 15, fontWeight: "500", includeFontPadding: false, color: adaptiveColors.secondaryLabel, fontVariant: ["tabular-nums"] }}>
                       {item.wearCount === 0 ? "Not worn yet" : `${formatCostPerWear(item)}/wear · ${item.wearCount} wears`}
                     </Text>
                   </View>
@@ -308,30 +286,34 @@ export default function ClosetScreen() {
         )}
       </ScrollView>
 
-      <Modal visible={showFilters} transparent animationType="slide" onRequestClose={() => setShowFilters(false)}>
-        <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.32)" }}>
-          <Pressable style={{ flex: 1 }} onPress={() => setShowFilters(false)} accessibilityLabel="Close filters" />
-          <View style={{ backgroundColor: "#FFFDF3", borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, paddingBottom: 40, gap: 22 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <View style={{ gap: 2 }}>
-                <Text style={{ fontSize: 20, fontWeight: "800", letterSpacing: -0.4, color: "#000" }}>Filters</Text>
-                <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.4)" }}>Narrow your closet in a few taps.</Text>
+      <Sheet visible={showFilters} onDismiss={() => setShowFilters(false)} snapPoints={[]} title="Filters" subtitle="Find the pieces you’re looking for." footer={
+        <View style={{ flexDirection: "row", gap: 12 }}>
+          <Pressable accessibilityRole="button" onPress={clearAllFilters} style={{ minHeight: 50, flex: 1, borderRadius: 14, backgroundColor: adaptiveColors.surfaceMuted, alignItems: "center", justifyContent: "center" }}><Text style={{ fontSize: 15, fontWeight: "600", color: adaptiveColors.label }}>Reset</Text></Pressable>
+          <Pressable accessibilityRole="button" onPress={() => setShowFilters(false)} style={{ minHeight: 50, flex: 2, borderRadius: 14, backgroundColor: adaptiveColors.label, alignItems: "center", justifyContent: "center" }}><Text style={{ fontSize: 15, fontWeight: "600", color: adaptiveColors.onAccent }}>Show {sortedItems.length} {sortedItems.length === 1 ? "piece" : "pieces"}</Text></Pressable>
+        </View>
+      }>
+
+            <View style={{ gap: 10 }}>
+              <Text style={{ fontSize: 12, fontWeight: "800", letterSpacing: 1.2, color: adaptiveColors.secondaryLabel, textTransform: "uppercase" }}>Show</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                <Chip label="Everything" count={items.length} selected={quick === "all"} onPress={() => setQuick("all")} />
+                <Chip label="Favorites" count={favoritesCount} selected={quick === "favorites"} onPress={() => setQuick("favorites")} />
+                <Chip label="Unworn" count={unwornCount} selected={quick === "unworn"} onPress={() => setQuick("unworn")} />
               </View>
-              <GlassButton icon="xmark" label="Close filters" onPress={() => setShowFilters(false)} size={36} />
             </View>
 
             <View style={{ gap: 10 }}>
-              <Text style={{ fontSize: 12, fontWeight: "800", letterSpacing: 1.2, color: "rgba(0,0,0,0.45)", textTransform: "uppercase" }}>Vibe</Text>
+              <Text style={{ fontSize: 12, fontWeight: "800", letterSpacing: 1.2, color: adaptiveColors.secondaryLabel, textTransform: "uppercase" }}>Vibe</Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                 <Chip label="Every vibe" selected={aestheticId === "all"} onPress={() => setAestheticId("all")} />
                 {aesthetics.map((aesthetic) => (
-                  <Chip key={aesthetic.id} label={aesthetic.label} selected={aesthetic.id === aestheticId} onPress={() => setAestheticId(aesthetic.id)} />
+                  <Chip key={aesthetic.id} label={aesthetic.label} selected={aestheticId === aesthetic.id} onPress={() => setAestheticId(aesthetic.id)} />
                 ))}
               </View>
             </View>
 
             <View style={{ gap: 10 }}>
-              <Text style={{ fontSize: 12, fontWeight: "800", letterSpacing: 1.2, color: "rgba(0,0,0,0.45)", textTransform: "uppercase" }}>Color</Text>
+              <Text style={{ fontSize: 12, fontWeight: "800", letterSpacing: 1.2, color: adaptiveColors.secondaryLabel, textTransform: "uppercase" }}>Color</Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
                 {colorOptions.map((color) => {
                   const selected = selectedColors.includes(color);
@@ -339,24 +321,25 @@ export default function ClosetScreen() {
                   return (
                     <Pressable
                       key={color}
+                      accessibilityRole="checkbox"
                       accessibilityLabel={`${color} color`}
-                      accessibilityState={{ selected }}
+                      accessibilityState={{ selected, checked: selected }}
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                         setSelectedColors((prev) => (prev.includes(color) ? prev.filter((c) => c !== color) : [...prev, color]));
                       }}
                       style={{
-                        width: 42,
-                        height: 42,
-                        borderRadius: 999,
+                        width: 44,
+                        height: 44,
+                        borderRadius: radius.pill,
                         alignItems: "center",
                         justifyContent: "center",
                         backgroundColor: swatchColor(color),
                         borderWidth: selected ? 3 : 1,
-                        borderColor: selected ? "#000" : "rgba(0,0,0,0.1)",
+                        borderColor: selected ? adaptiveColors.label : "rgba(0,0,0,0.1)",
                       }}
                     >
-                      {selected ? <SymbolView name="checkmark" tintColor={light ? "rgba(0,0,0,0.7)" : "rgba(255,255,255,0.92)"} weight="bold" size={17} /> : null}
+                      {selected ? <WardrobeIcon name="checkmark" color={light ? adaptiveColors.label : "#FFFFFF"} weight="bold" size={17} /> : null}
                     </Pressable>
                   );
                 })}
@@ -364,8 +347,8 @@ export default function ClosetScreen() {
             </View>
 
             <View style={{ gap: 6 }}>
-              <Text style={{ fontSize: 12, fontWeight: "800", letterSpacing: 1.2, color: "rgba(0,0,0,0.45)", textTransform: "uppercase" }}>Season</Text>
-              <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", backgroundColor: "#FFFFFA", paddingHorizontal: 16 }}>
+              <Text style={{ fontSize: 12, fontWeight: "800", letterSpacing: 1.2, color: adaptiveColors.secondaryLabel, textTransform: "uppercase" }}>Season</Text>
+              <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: adaptiveColors.border, backgroundColor: adaptiveColors.surface, paddingHorizontal: 16 }}>
                 {seasonOptions.map((season, index) => {
                   const selected = selectedSeasons.includes(season.id);
                   return (
@@ -381,17 +364,15 @@ export default function ClosetScreen() {
                       }}
                     >
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                        <SymbolView name={season.icon} tintColor="rgba(0,0,0,0.5)" size={17} />
-                        <Text style={{ fontSize: 15, fontWeight: "600", color: "#000" }}>{season.label}</Text>
+                        <WardrobeIcon name={season.icon} color={adaptiveColors.secondaryLabel} size={18} />
+                        <Text style={{ fontSize: 15, fontWeight: "600", color: adaptiveColors.label }}>{season.label}</Text>
                       </View>
-                      <Switch
+                      <NativeSwitch
                         value={selected}
                         onValueChange={(value) => {
                           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                           setSelectedSeasons((prev) => (value ? [...prev, season.id] : prev.filter((s) => s !== season.id)));
                         }}
-                        trackColor={{ false: "#E4E4EA", true: "#000000" }}
-                        thumbColor="#FFFFFF"
                       />
                     </View>
                   );
@@ -399,68 +380,30 @@ export default function ClosetScreen() {
               </View>
             </View>
 
-            <View style={{ flexDirection: "row", gap: 10 }}>
-              <Button variant="secondary" icon="trash" style={{ flex: 1 }} onPress={clearAllFilters}>
-                Clear
-              </Button>
-              <Button icon="checkmark" style={{ flex: 1 }} onPress={() => setShowFilters(false)}>
-                Done
-              </Button>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      </Sheet>
 
-      <Modal visible={showSort} transparent animationType="slide" onRequestClose={() => setShowSort(false)}>
-        <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.32)" }}>
-          <Pressable style={{ flex: 1 }} onPress={() => setShowSort(false)} accessibilityLabel="Close sort options" />
-          <View style={{ backgroundColor: "#FFFDF3", borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, paddingBottom: 40, gap: 18 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <View style={{ gap: 2 }}>
-                <Text style={{ fontSize: 20, fontWeight: "800", letterSpacing: -0.4, color: "#000" }}>Sort by</Text>
-                <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.4)" }}>Order your closet the way you think.</Text>
-              </View>
-              <GlassButton icon="xmark" label="Close sort options" onPress={() => setShowSort(false)} size={36} />
-            </View>
-
-            <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", backgroundColor: "#FFFFFA", paddingHorizontal: 16 }}>
-              {sortOptions.map((option, index) => {
+      <Sheet visible={showSort} onDismiss={() => setShowSort(false)} compact title="Sort by" subtitle="Choose how your pieces are ordered.">
+            <View accessibilityRole="radiogroup" style={{ gap: 6 }}>
+              {sortOptions.map((option) => {
                 const selected = sortKey === option.id;
                 return (
-                  <Pressable
+                  <SelectionRow
                     key={option.id}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected }}
+                    title={option.label}
+                    subtitle={option.subtitle}
+                    icon={option.icon}
+                    selected={selected}
                     onPress={() => {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                       setSortKey(option.id);
                       setShowSort(false);
                     }}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 12,
-                      paddingVertical: 13,
-                      borderBottomWidth: index === sortOptions.length - 1 ? 0 : 1,
-                      borderBottomColor: "rgba(0,0,0,0.05)",
-                    }}
-                  >
-                    <View style={{ width: 34, height: 34, borderRadius: 999, backgroundColor: selected ? "#000" : "rgba(0,0,0,0.05)", alignItems: "center", justifyContent: "center" }}>
-                      <SymbolView name={option.icon} tintColor={selected ? "#FFFDF3" : "rgba(0,0,0,0.55)"} size={16} />
-                    </View>
-                    <View style={{ flex: 1, gap: 1 }}>
-                      <Text style={{ fontSize: 15, fontWeight: "700", color: "#000" }}>{option.label}</Text>
-                      <Text style={{ fontSize: 12, fontWeight: "500", color: "rgba(0,0,0,0.4)" }}>{option.subtitle}</Text>
-                    </View>
-                    {selected ? <SymbolView name="checkmark" tintColor="#000" weight="bold" size={15} /> : null}
-                  </Pressable>
+                  />
                 );
               })}
             </View>
-          </View>
-        </View>
-      </Modal>
-    </View>
+      </Sheet>
+    </Screen>
   );
 }
 
@@ -477,75 +420,32 @@ function Chip({ label, icon, count, selected, onPress }: { label: string; icon?:
         flexDirection: "row",
         alignItems: "center",
         gap: 6,
-        height: 38,
+        height: 44,
         paddingHorizontal: 14,
-        borderRadius: 999,
-        backgroundColor: selected ? "#000" : "rgba(0,0,0,0.04)",
+        borderRadius: radius.pill,
+        backgroundColor: adaptiveColors.glass,
         borderWidth: 1,
-        borderColor: selected ? "#000" : "rgba(0,0,0,0.06)",
+        borderColor: selected ? adaptiveColors.accent : adaptiveColors.border,
       }}
     >
-      {icon ? <SymbolView name={icon} tintColor={selected ? "#FFFDF3" : "rgba(0,0,0,0.55)"} size={15} /> : null}
-      <Text style={{ fontSize: 13, fontWeight: "700", color: selected ? "#FFFDF3" : "rgba(0,0,0,0.55)", textTransform: "capitalize" }}>{label}</Text>
-      {count != null ? <Text style={{ fontSize: 12, fontWeight: "800", color: selected ? "rgba(255,253,243,0.6)" : "rgba(0,0,0,0.3)", fontVariant: ["tabular-nums"] }}>{count}</Text> : null}
+      {icon ? <WardrobeIcon name={icon} color={selected ? adaptiveColors.accent : adaptiveColors.secondaryLabel} size={15} /> : null}
+      <Text style={{ fontSize: 13, lineHeight: 18, includeFontPadding: false, fontWeight: "700", color: selected ? adaptiveColors.accent : adaptiveColors.secondaryLabel, textTransform: "capitalize" }}>{label}</Text>
+      {count != null ? <Text style={{ fontSize: 12, lineHeight: 17, includeFontPadding: false, fontWeight: "700", color: selected ? adaptiveColors.accent : adaptiveColors.tertiaryLabel, fontVariant: ["tabular-nums"] }}>{count}</Text> : null}
     </Pressable>
   );
 }
 
-function ClosetInsights({ items }: { items: ReturnType<typeof useCloset>["items"] }) {
-  const neverWorn = items.filter((item) => !item.lastWorn).length;
-  const gaps = findWardrobeGaps(items);
-  const stats = [
-    { icon: "square.grid.2x2" as SymbolName, label: "Total pieces", value: items.length, accent: false },
-    { icon: "clock.badge.exclamationmark" as SymbolName, label: "Never worn", value: neverWorn, accent: true },
-  ];
-
+function NewClosetState() {
   return (
-    <View style={{ gap: 12 }}>
-      <View style={{ flexDirection: "row", gap: 10 }}>
-        {stats.map((stat) => (
-          <Pressable
-            key={stat.label}
-            accessibilityRole="button"
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push("/analytics");
-            }}
-            style={{
-              flex: 1,
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 10,
-              borderRadius: 22,
-              borderCurve: "continuous",
-              backgroundColor: "#FFFFFA",
-              paddingHorizontal: 14,
-              paddingVertical: 13,
-              boxShadow: "0 10px 24px rgba(0,0,0,0.045)",
-            }}
-          >
-            <View style={{ width: 38, height: 38, borderRadius: 999, backgroundColor: stat.accent ? "rgba(255,149,0,0.12)" : "rgba(0,0,0,0.05)", alignItems: "center", justifyContent: "center" }}>
-              <SymbolView name={stat.icon} tintColor={stat.accent ? "#FF9500" : "rgba(0,0,0,0.5)"} size={17} />
-            </View>
-            <View style={{ flex: 1, gap: 1 }}>
-              <Text style={{ fontSize: 11, fontWeight: "600", color: "rgba(0,0,0,0.4)" }}>{stat.label}</Text>
-              <Text style={{ fontSize: 22, fontWeight: "800", letterSpacing: -0.5, color: "#000", fontVariant: ["tabular-nums"], lineHeight: 24 }}>{stat.value}</Text>
-            </View>
-          </Pressable>
-        ))}
+    <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: spacing.xxxl, gap: spacing.xl }}>
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ alignItems: "center", justifyContent: "center", padding: spacing.sm }}>
+        <WardrobeIcon name="tshirt" color={adaptiveColors.tertiaryLabel} size={32} />
       </View>
-      {gaps.length > 0 ? (
-        <Pressable
-          onPress={() => router.push("/analytics")}
-          style={{ flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 20, borderCurve: "continuous", backgroundColor: "#FFF4E0", paddingHorizontal: 16, paddingVertical: 12 }}
-        >
-          <SymbolView name="exclamationmark.triangle.fill" tintColor="#FF9500" size={15} />
-          <Text style={{ flex: 1, fontSize: 13, fontWeight: "700", color: "rgba(0,0,0,0.7)" }}>
-            Low on {gaps.map((cat) => categoryLabels[cat].toLowerCase()).join(" · ")} — see what to add.
-          </Text>
-          <SymbolView name="chevron.right" tintColor="rgba(0,0,0,0.25)" size={14} />
-        </Pressable>
-      ) : null}
+      <View style={{ gap: spacing.sm, alignItems: "center", maxWidth: 300 }}>
+        <Text accessibilityRole="header" style={{ fontSize: 22, fontWeight: "600", letterSpacing: -0.5, color: adaptiveColors.label, textAlign: "center" }}>Room for your favorites</Text>
+        <Text style={{ fontSize: 14, lineHeight: 21, color: adaptiveColors.secondaryLabel, textAlign: "center" }}>Start with your first piece.</Text>
+      </View>
+      <Button onPress={() => router.push("/scan")} style={{ minHeight: 48, paddingHorizontal: spacing.xl, borderRadius: radius.pill }}>Add a piece</Button>
     </View>
   );
 }
@@ -556,11 +456,28 @@ function EmptyState({ onClear }: { onClear: () => void }) {
       <View style={{ width: 64, height: 64, borderRadius: 22, borderCurve: "continuous", backgroundColor: "rgba(0,0,0,0.04)", alignItems: "center", justifyContent: "center", marginBottom: 4 }}>
         <SymbolView name="rectangle.on.rectangle.slash" tintColor="rgba(0,0,0,0.35)" size={28} />
       </View>
-      <Text style={{ fontSize: 17, fontWeight: "700", letterSpacing: -0.3, color: "#000" }}>No pieces found</Text>
-      <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.4)", textAlign: "center", lineHeight: 19 }}>Try a different filter, search, or add more items.</Text>
-      <Button variant="secondary" onPress={onClear} style={{ marginTop: 12 }}>
-        Clear all filters
-      </Button>
+      <Text style={{ fontSize: 17, fontWeight: "700", letterSpacing: -0.3, color: adaptiveColors.label }}>No pieces found</Text>
+      <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel, textAlign: "center", lineHeight: 19 }}>Try a different filter, search, or add more items.</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Clear all filters"
+        onPress={onClear}
+        style={{
+          minHeight: 48,
+          marginTop: 14,
+          paddingHorizontal: 22,
+          borderRadius: radius.pill,
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          backgroundColor: adaptiveColors.accent,
+          boxShadow: "0 6px 18px rgba(164,94,42,0.22)",
+        }}
+      >
+        <WardrobeIcon name="xmark" color={adaptiveColors.onAccent} size={15} weight="semibold" />
+        <Text style={{ fontSize: 14, lineHeight: 19, fontWeight: "700", color: adaptiveColors.onAccent }}>Clear all filters</Text>
+      </Pressable>
     </View>
   );
 }

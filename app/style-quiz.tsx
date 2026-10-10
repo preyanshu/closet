@@ -1,11 +1,11 @@
-import { Button, Screen } from "@/components/ui";
+import { adaptiveColors, radius, Button, ModalHeader, NativeSwitch, Screen } from "@/components/ui";
 import { aesthetics } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
 import { SymbolView } from "expo-symbols";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useState } from "react";
-import { Pressable, Switch, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 const steps = [
   { title: "Pick your aesthetics", subtitle: "Select all that match your style" },
@@ -54,22 +54,23 @@ export default function StyleQuizScreen() {
   };
 
   return (
-    <Screen>
+    <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
+      <ModalHeader title="Style profile" subtitle="Personalize your wardrobe suggestions." />
       <View style={{ gap: 4 }}>
         <View style={{ flexDirection: "row", gap: 4 }}>
           {steps.map((_, i) => (
-            <View key={i} style={{ flex: 1, height: 4, borderRadius: 999, backgroundColor: i <= step ? "#000" : "rgba(0,0,0,0.1)" }} />
+            <View key={i} style={{ flex: 1, height: 4, borderRadius: radius.pill, backgroundColor: i <= step ? adaptiveColors.label : "rgba(0,0,0,0.1)" }} />
           ))}
         </View>
       </View>
 
       <View style={{ gap: 4 }}>
-        <Text style={{ fontSize: 24, fontWeight: "700", color: "#000", letterSpacing: -0.5 }}>{steps[step].title}</Text>
-        <Text style={{ fontSize: 15, color: "rgba(0,0,0,0.45)" }}>{steps[step].subtitle}</Text>
+        <Text style={{ fontSize: 24, fontWeight: "700", color: adaptiveColors.label, letterSpacing: -0.5 }}>{steps[step].title}</Text>
+        <Text style={{ fontSize: 15, color: adaptiveColors.secondaryLabel }}>{steps[step].subtitle}</Text>
       </View>
 
       {step === 0 && (
-        <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", backgroundColor: "#FFFFFA", paddingHorizontal: 16 }}>
+        <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: adaptiveColors.border, backgroundColor: adaptiveColors.surface, paddingHorizontal: 16 }}>
           {aesthetics.map((a, index) => {
             const selected = selectedAesthetics.includes(a.id);
             return (
@@ -84,12 +85,10 @@ export default function StyleQuizScreen() {
                   borderBottomColor: "rgba(0,0,0,0.05)",
                 }}
               >
-                <Text style={{ fontSize: 15, fontWeight: "600", color: "#000" }}>{a.label}</Text>
-                <Switch
+                <Text style={{ fontSize: 15, fontWeight: "600", color: adaptiveColors.label }}>{a.label}</Text>
+                <NativeSwitch
                   value={selected}
                   onValueChange={() => toggleAesthetic(a.id)}
-                  trackColor={{ false: "#E4E4EA", true: "#000000" }}
-                  thumbColor="#FFFFFF"
                 />
               </View>
             );
@@ -98,7 +97,7 @@ export default function StyleQuizScreen() {
       )}
 
       {step === 1 && (
-        <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", backgroundColor: "#FFFFFA", paddingHorizontal: 16 }}>
+        <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: adaptiveColors.border, backgroundColor: adaptiveColors.surface, paddingHorizontal: 16 }}>
           {priorities.map((p, index) => {
             const selected = selectedPriorities.includes(p.id);
             return (
@@ -113,15 +112,13 @@ export default function StyleQuizScreen() {
                   borderBottomColor: "rgba(0,0,0,0.05)",
                 }}
               >
-                <View style={{ width: 36, height: 36, borderRadius: 999, backgroundColor: "rgba(0,0,0,0.06)", alignItems: "center", justifyContent: "center" }}>
+                <View style={{ width: 36, height: 36, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.06)", alignItems: "center", justifyContent: "center" }}>
                   <SymbolView name={p.icon} tintColor="rgba(0,0,0,0.5)" style={{ width: 18, height: 18 }} />
                 </View>
-                <Text style={{ flex: 1, fontSize: 15, fontWeight: "600", color: "#000" }}>{p.label}</Text>
-                <Switch
+                <Text style={{ flex: 1, fontSize: 15, fontWeight: "600", color: adaptiveColors.label }}>{p.label}</Text>
+                <NativeSwitch
                   value={selected}
                   onValueChange={() => togglePriority(p.id)}
-                  trackColor={{ false: "#E4E4EA", true: "#000000" }}
-                  thumbColor="#FFFFFF"
                 />
               </View>
             );
@@ -134,14 +131,14 @@ export default function StyleQuizScreen() {
           {paletteOptions.map((p) => {
             const selected = selectedPalette === p.id;
             return (
-              <Pressable key={p.id} onPress={() => setSelectedPalette(selected ? null : p.id)} style={{ flexDirection: "row", alignItems: "center", gap: 14, padding: 16, borderRadius: 18, backgroundColor: selected ? "#000" : "rgba(0,0,0,0.03)", borderWidth: 1, borderColor: selected ? "#000" : "rgba(0,0,0,0.06)" }}>
+              <Pressable key={p.id} onPress={() => setSelectedPalette(selected ? null : p.id)} style={{ flexDirection: "row", alignItems: "center", gap: 14, padding: 16, borderRadius: 18, backgroundColor: selected ? adaptiveColors.label : "rgba(0,0,0,0.03)", borderWidth: 1, borderColor: selected ? adaptiveColors.label : "rgba(0,0,0,0.06)" }}>
                 <View style={{ flexDirection: "row", gap: 4 }}>
                   {p.colors.map((c, i) => (
-                    <View key={i} style={{ width: 24, height: 24, borderRadius: 999, backgroundColor: c, borderWidth: 1, borderColor: "rgba(0,0,0,0.1)" }} />
+                    <View key={i} style={{ width: 24, height: 24, borderRadius: radius.pill, backgroundColor: c, borderWidth: 1, borderColor: adaptiveColors.border }} />
                   ))}
                 </View>
-                <Text style={{ flex: 1, fontSize: 15, fontWeight: "600", color: selected ? "#FFFDF3" : "#000" }}>{p.label}</Text>
-                {selected && <SymbolView name="checkmark" tintColor="#FFFDF3" style={{ width: 18, height: 18 }} />}
+                <Text style={{ flex: 1, fontSize: 15, fontWeight: "600", color: selected ? adaptiveColors.onAccent : adaptiveColors.label }}>{p.label}</Text>
+                {selected && <SymbolView name="checkmark" tintColor={adaptiveColors.onAccent} style={{ width: 18, height: 18 }} />}
               </Pressable>
             );
           })}

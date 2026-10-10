@@ -1,4 +1,4 @@
-import { Card, Screen, SectionHeader } from "@/components/ui";
+import { adaptiveColors, radius, Card, Screen, SectionHeader, WardrobeIcon } from "@/components/ui";
 import { aesthetics, categoryLabels, type ClothingCategory } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
 import { SymbolView } from "expo-symbols";
@@ -24,25 +24,25 @@ export default function StyleScreen() {
 
       <Card className="gap-4">
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <View style={{ width: 36, height: 36, borderRadius: 999, backgroundColor: "rgba(255,149,0,0.12)", alignItems: "center", justifyContent: "center" }}>
+          <View style={{ width: 36, height: 36, borderRadius: radius.pill, backgroundColor: "rgba(255,149,0,0.12)", alignItems: "center", justifyContent: "center" }}>
             <SymbolView name="exclamationmark.triangle" tintColor="#FF9500" style={{ width: 18, height: 18 }} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 17, fontWeight: "700", color: "#000" }}>Wardrobe Gaps</Text>
-            <Text style={{ fontSize: 13, color: "rgba(0,0,0,0.45)" }}>What's missing from your closet</Text>
+            <Text style={{ fontSize: 17, fontWeight: "700", color: adaptiveColors.label }}>Wardrobe Gaps</Text>
+            <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>What's missing from your closet</Text>
           </View>
         </View>
         {gaps.length === 0 ? (
-          <Text style={{ fontSize: 14, color: "rgba(0,0,0,0.4)" }}>Your wardrobe is well covered!</Text>
+          <Text style={{ fontSize: 14, color: adaptiveColors.secondaryLabel }}>Your wardrobe is well covered!</Text>
         ) : (
           <View style={{ gap: 8 }}>
             {gaps.map((gap) => (
               <View key={gap.category} style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.06)" }}>
-                <View style={{ width: 28, height: 28, borderRadius: 999, backgroundColor: "rgba(0,0,0,0.04)", alignItems: "center", justifyContent: "center" }}>
+                <View style={{ width: 28, height: 28, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.04)", alignItems: "center", justifyContent: "center" }}>
                   <Text style={{ fontSize: 12, fontWeight: "700", color: "rgba(0,0,0,0.3)" }}>{gap.count}</Text>
                 </View>
-                <Text style={{ flex: 1, fontSize: 14, fontWeight: "600", color: "#000" }}>{categoryLabels[gap.category]}</Text>
-                <Text style={{ fontSize: 12, color: "rgba(0,0,0,0.35)" }}>{gap.suggestion}</Text>
+                <Text style={{ flex: 1, fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>{categoryLabels[gap.category]}</Text>
+                <Text style={{ fontSize: 12, color: adaptiveColors.secondaryLabel }}>{gap.suggestion}</Text>
               </View>
             ))}
           </View>
@@ -52,12 +52,12 @@ export default function StyleScreen() {
       <Pressable onPress={() => router.push("/packing")}>
         <Card className="gap-4">
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <View style={{ width: 36, height: 36, borderRadius: 999, backgroundColor: "rgba(0,122,255,0.12)", alignItems: "center", justifyContent: "center" }}>
-              <SymbolView name="suitcase" tintColor="#007AFF" style={{ width: 18, height: 18 }} />
+            <View style={{ width: 36, height: 36, borderRadius: radius.pill, backgroundColor: "rgba(0,122,255,0.12)", alignItems: "center", justifyContent: "center" }}>
+              <WardrobeIcon name="suitcase" color="#007AFF" size={18} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 17, fontWeight: "700", color: "#000" }}>Plan a Trip</Text>
-              <Text style={{ fontSize: 13, color: "rgba(0,0,0,0.45)" }}>Packing list from your closet</Text>
+              <Text style={{ fontSize: 17, fontWeight: "700", color: adaptiveColors.label }}>Plan a Trip</Text>
+              <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>Packing list from your closet</Text>
             </View>
             <SymbolView name="chevron.right" tintColor="rgba(0,0,0,0.25)" style={{ width: 16, height: 16 }} />
           </View>
@@ -65,7 +65,7 @@ export default function StyleScreen() {
       </Pressable>
 
       <View style={{ gap: 10 }}>
-        <Text style={{ fontSize: 13, fontWeight: "700", color: "rgba(0,0,0,0.4)", textTransform: "uppercase", letterSpacing: 1.5 }}>Quick outfits for</Text>
+        <Text style={{ fontSize: 13, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5 }}>Quick outfits for</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
           {occasionPresets.map((preset) => (
             <Pressable
@@ -74,30 +74,30 @@ export default function StyleScreen() {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 router.push("/builder");
               }}
-              style={{ width: "47%", padding: 16, borderRadius: 18, gap: 10, backgroundColor: "rgba(0,0,0,0.03)", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)" }}
+              style={{ width: "47%", padding: 16, borderRadius: 18, gap: 10, backgroundColor: "rgba(0,0,0,0.03)", borderWidth: 1, borderColor: adaptiveColors.border }}
             >
-              <SymbolView name={preset.icon} tintColor="rgba(0,0,0,0.4)" style={{ width: 22, height: 22 }} />
-              <Text style={{ fontSize: 15, fontWeight: "700", color: "#000" }}>{preset.label}</Text>
+              <WardrobeIcon name={preset.icon} color={adaptiveColors.secondaryLabel} size={22} />
+              <Text style={{ fontSize: 15, fontWeight: "700", color: adaptiveColors.label }}>{preset.label}</Text>
             </Pressable>
           ))}
         </View>
       </View>
 
       <View style={{ gap: 10 }}>
-        <Text style={{ fontSize: 13, fontWeight: "700", color: "rgba(0,0,0,0.4)", textTransform: "uppercase", letterSpacing: 1.5 }}>Style directions</Text>
+        <Text style={{ fontSize: 13, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5 }}>Style directions</Text>
         {aesthetics.map((aesthetic) => {
           const count = items.filter((i) => i.aesthetics.includes(aesthetic.id)).length;
           return (
             <Card key={aesthetic.id} className="gap-3">
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                 <View style={{ flex: 1, gap: 2 }}>
-                  <Text style={{ fontSize: 16, fontWeight: "700", color: "#000" }}>{aesthetic.label}</Text>
-                  <Text style={{ fontSize: 12, color: "rgba(0,0,0,0.4)" }}>{count} pieces in closet</Text>
+                  <Text style={{ fontSize: 16, fontWeight: "700", color: adaptiveColors.label }}>{aesthetic.label}</Text>
+                  <Text style={{ fontSize: 12, color: adaptiveColors.secondaryLabel }}>{count} pieces in closet</Text>
                 </View>
-                <Text style={{ fontSize: 20, fontWeight: "700", color: "#000" }}>{aesthetic.coveragePercent}%</Text>
+                <Text style={{ fontSize: 20, fontWeight: "700", color: adaptiveColors.label }}>{aesthetic.coveragePercent}%</Text>
               </View>
-              <View style={{ height: 4, borderRadius: 999, backgroundColor: "rgba(0,0,0,0.06)" }}>
-                <View style={{ height: "100%", width: `${aesthetic.coveragePercent}%`, borderRadius: 999, backgroundColor: "#000" }} />
+              <View style={{ height: 4, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.06)" }}>
+                <View style={{ height: "100%", width: `${aesthetic.coveragePercent}%`, borderRadius: radius.pill, backgroundColor: adaptiveColors.label }} />
               </View>
             </Card>
           );

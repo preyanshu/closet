@@ -1,14 +1,17 @@
 import "@/global.css";
 
-import { ClosetProvider } from "@/state/closet-context";
-import { GlassLayer } from "@/components/ui";
+import { ClosetProvider, useCloset } from "@/state/closet-context";
+import { adaptiveColors, radius, GlassButton, WardrobeIcon } from "@/components/ui";
+import { WardrobeThemeProvider, useWardrobeTheme } from "@/theme/wardrobe-theme";
 import { BlurView } from "expo-blur";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
-import { router, Stack } from "expo-router";
+import { router, Stack, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { SymbolView } from "expo-symbols";
-import { Pressable } from "react-native";
+import { Text, View } from "react-native";
+import { useEffect } from "react";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import Animated, { FadeInDown, FadeOut, ReduceMotion } from "react-native-reanimated";
 
 const closeModal = () => {
   if (router.canDismiss()) {
@@ -25,15 +28,27 @@ const closeModal = () => {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ClosetProvider>
-        <StatusBar style="dark" />
+      <WardrobeThemeProvider>
+        <ClosetProvider>
+          <RootNavigator />
+        </ClosetProvider>
+      </WardrobeThemeProvider>
+    </GestureHandlerRootView>
+  );
+}
+
+function RootNavigator() {
+  const { dark, colors } = useWardrobeTheme();
+  return (
+    <>
+        <StatusBar style={dark ? "light" : "dark"} />
         <Stack
           screenOptions={{
             headerTransparent: true,
-            headerTintColor: "#000000",
+            headerTintColor: colors.label,
             headerTitleStyle: { fontWeight: "700" },
             headerBackground: () => <NativeHeaderGlass />,
-            contentStyle: { backgroundColor: "#FFFDF3" },
+            contentStyle: { backgroundColor: colors.canvas },
           }}
         >
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -41,8 +56,8 @@ export default function RootLayout() {
             name="scan"
             options={{
               title: "Scan",
-              presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              presentation: "fullScreenModal",
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -50,7 +65,7 @@ export default function RootLayout() {
             options={{
               title: "Alta",
               presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -58,7 +73,7 @@ export default function RootLayout() {
             options={{
               title: "Outfit Builder",
               presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -66,7 +81,7 @@ export default function RootLayout() {
             options={{
               title: "Outfit Calendar",
               presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -74,7 +89,7 @@ export default function RootLayout() {
             options={{
               title: "Saved Looks",
               presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -82,7 +97,7 @@ export default function RootLayout() {
             options={{
               title: "Look Details",
               presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -90,7 +105,7 @@ export default function RootLayout() {
             options={{
               title: "Confirm Item",
               presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -98,7 +113,7 @@ export default function RootLayout() {
             options={{
               title: "Wardrobe Analytics",
               presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -106,7 +121,7 @@ export default function RootLayout() {
             options={{
               title: "Packing List",
               presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -114,7 +129,7 @@ export default function RootLayout() {
             options={{
               title: "Style Quiz",
               presentation: "modal",
-              headerLeft: () => <NativeGlassCloseButton />,
+              headerShown: false,
             }}
           />
           <Stack.Screen
@@ -122,31 +137,55 @@ export default function RootLayout() {
             options={{
               title: "Item",
               presentation: "card",
+              headerTransparent: false,
+              headerShadowVisible: false,
+              headerStyle: { backgroundColor: colors.canvas },
+              headerBackground: () => <View style={{ flex: 1, backgroundColor: colors.canvas }} />,
               headerBackButtonDisplayMode: "minimal",
             }}
           />
         </Stack>
-      </ClosetProvider>
-    </GestureHandlerRootView>
+        <AddedPiecesToast />
+    </>
+  );
+}
+
+function AddedPiecesToast() {
+  const { addedMessage, setAddedMessage } = useCloset();
+  const { colors } = useWardrobeTheme();
+  const insets = useSafeAreaInsets();
+  const pathname = usePathname();
+  const visible = Boolean(addedMessage) && pathname !== "/scan";
+
+  useEffect(() => {
+    if (!visible) return;
+    const timer = setTimeout(() => setAddedMessage(null), 2400);
+    return () => clearTimeout(timer);
+  }, [visible, addedMessage, setAddedMessage]);
+
+  return (
+    <View pointerEvents="none" collapsable={false} style={{ position: "absolute", left: 20, right: 20, bottom: insets.bottom + 80, alignItems: "center" }}>
+      {visible ? <Animated.View
+        entering={FadeInDown.duration(220).reduceMotion(ReduceMotion.System)}
+        exiting={FadeOut.duration(160).reduceMotion(ReduceMotion.System)}
+        accessibilityLiveRegion="polite"
+        style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 20, paddingVertical: 12, borderRadius: radius.pill, backgroundColor: colors.label, boxShadow: "0 4px 16px rgba(0,0,0,0.16)" }}
+      >
+        <WardrobeIcon name="checkmark.circle.fill" color="#4CD964" size={20} />
+        <Text style={{ fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.onAccent }}>{addedMessage}</Text>
+      </Animated.View> : null}
+    </View>
   );
 }
 
 function NativeGlassCloseButton() {
-  return (
-    <Pressable
-      accessibilityLabel="Close"
-      onPress={closeModal}
-      className="h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-black/[0.04]"
-    >
-      <GlassLayer />
-      <SymbolView name="xmark" tintColor="#000000" style={{ width: 22, height: 22 }} />
-    </Pressable>
-  );
+  return <GlassButton icon="xmark" label="Close" onPress={closeModal} />;
 }
 
 function NativeHeaderGlass() {
+  const { dark, colors } = useWardrobeTheme();
   if (isLiquidGlassAvailable()) {
-    return <GlassView glassEffectStyle={{ style: "clear", animate: true }} colorScheme="light" tintColor="#FFFFFF" style={{ flex: 1 }} />;
+    return <GlassView glassEffectStyle={{ style: "clear", animate: true }} colorScheme={dark ? "dark" : "light"} tintColor={colors.glass} style={{ flex: 1 }} />;
   }
-  return <BlurView intensity={56} tint="light" style={{ flex: 1, backgroundColor: "rgba(255,253,243,0.62)" }} />;
+  return <BlurView intensity={56} tint={dark ? "dark" : "light"} style={{ flex: 1, backgroundColor: colors.glass }} />;
 }

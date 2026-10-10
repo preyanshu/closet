@@ -1,4 +1,4 @@
-import { Card, GlassButton, GlassLayer, ItemImage, Screen } from "@/components/ui";
+import { adaptiveColors, Card, GlassButton, GlassLayer, ItemImage, NativePicker, Screen, WardrobeIcon } from "@/components/ui";
 import { type ClothingItem, type Outfit } from "@/data/mock";
 import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
@@ -6,7 +6,6 @@ import * as Haptics from "expo-haptics";
 import { SymbolView } from "expo-symbols";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import SegmentedControlIOS from "@react-native-segmented-control/segmented-control";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
@@ -33,32 +32,24 @@ export default function HomeScreen() {
 
   return (
     <Screen>
-      <View className="gap-7">
+      <View className="gap-6">
         <HomeHeader />
         <AskCard />
 
-        <SegmentedControlIOS
-          values={quickAestheticLabels}
-          selectedIndex={Math.max(0, quickAestheticIds.indexOf(selectedAestheticId))}
-          onChange={(event) => setSelectedAestheticId(quickAestheticIds[event.nativeEvent.selectedSegmentIndex])}
-          tintColor="#000000"
-          backgroundColor="rgba(0,0,0,0.05)"
-          fontStyle={{ color: "rgba(0,0,0,0.5)", fontSize: 12, fontWeight: "600" }}
-          activeFontStyle={{ color: "#FFFDF3", fontSize: 12, fontWeight: "700" }}
-        />
+        <NativePicker value={selectedAestheticId} onValueChange={setSelectedAestheticId} options={quickAestheticIds.map((value, index) => ({ value, label: quickAestheticLabels[index] }))} label="Outfit aesthetic" />
       </View>
 
-      <View className="gap-3">
+      <View className="gap-4">
         <View className="flex-row items-center justify-between">
-          <Text className="text-xs font-bold uppercase tracking-[2px] text-black/40">Alta looks</Text>
+          <Text className="text-xs font-bold uppercase tracking-[2px] text-black/40 dark:text-white/40">Alta looks</Text>
           <Pressable onPress={() => router.push("/outfits")} className="flex-row items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/[0.04]">
-            <SymbolView name="heart" tintColor="rgba(0,0,0,0.4)" style={{ width: 13, height: 13 }} />
-            <Text className="text-xs font-semibold text-black/50">Saved</Text>
+            <WardrobeIcon name="heart" color={adaptiveColors.secondaryLabel} size={13} />
+            <Text style={{ fontSize: 12, lineHeight: 16, fontWeight: "600", includeFontPadding: false, color: adaptiveColors.secondaryLabel }}>Saved</Text>
           </Pressable>
         </View>
       </View>
 
-      <View className="gap-8">
+      <View className="gap-6">
         {outfits.map((outfit, index) => {
           const outfitItems = outfit.itemIds
             .map((id) => items.find((item) => item.id === id))
@@ -70,8 +61,8 @@ export default function HomeScreen() {
             <Card key={outfit.id} className="gap-4 rounded-[18px] p-4">
               <View className="flex-row items-start justify-between gap-4">
                 <View className="flex-1 gap-1">
-                  <Text className="text-[17px] font-bold tracking-[-0.3px] text-black">{meta.title}</Text>
-                  <Text className="text-xs font-medium text-black/45">{meta.occasion}</Text>
+                  <Text className="text-[17px] font-bold tracking-[-0.3px] text-black dark:text-[#FFF9ED]">{meta.title}</Text>
+                  <Text className="text-xs font-medium text-black/45 dark:text-white/45">{meta.occasion}</Text>
                 </View>
                 <SegmentedControl mode={mode} onChange={(nextMode) => setMode(outfit.id, nextMode)} />
               </View>
@@ -81,7 +72,7 @@ export default function HomeScreen() {
               <View className="flex-row items-center justify-between pt-1">
                 <View className="flex-row items-center gap-1.5">
                   <SymbolView name="sparkles" tintColor="rgba(0,0,0,0.38)" style={{ width: 14, height: 14 }} />
-                  <Text className="text-xs font-semibold uppercase tracking-[1.3px] text-black/38">{outfitItems.length} pieces</Text>
+                  <Text className="text-xs font-semibold uppercase tracking-[1.3px] text-black/38 dark:text-white/38">{outfitItems.length} pieces</Text>
                 </View>
                 <View className="flex-row items-center gap-2">
                   <LikeButton saved={isSavedLook(outfit.id)} onToggle={() => toggleSavedLook(outfit.id)} />
@@ -96,9 +87,9 @@ export default function HomeScreen() {
       {myLooks.length > 0 && (
         <View className="gap-3">
           <View className="flex-row items-center justify-between">
-            <Text className="text-xs font-bold uppercase tracking-[2px] text-black/40">My looks</Text>
+            <Text className="text-xs font-bold uppercase tracking-[2px] text-black/40 dark:text-white/40">My looks</Text>
             <View className="px-2.5 py-1 rounded-full bg-black/[0.06]">
-              <Text className="text-[11px] font-bold uppercase tracking-[1px] text-black/40">Custom</Text>
+              <Text className="text-[11px] font-bold uppercase tracking-[1px] text-black/40 dark:text-white/40">Custom</Text>
             </View>
           </View>
 
@@ -107,11 +98,11 @@ export default function HomeScreen() {
               <Card key={look.id} className="gap-3 rounded-[18px] p-4">
                 <View className="flex-row items-center justify-between">
                   <View className="flex-1 gap-1">
-                    <Text className="text-[15px] font-bold text-black">{look.label}</Text>
-                    <Text className="text-xs text-black/45">{look.itemIds.length} pieces · {look.description}</Text>
+                    <Text className="text-[15px] font-bold text-black dark:text-[#FFF9ED]">{look.label}</Text>
+                    <Text className="text-xs text-black/45 dark:text-white/45">{look.itemIds.length} pieces · {look.description}</Text>
                   </View>
                   <View className="px-2 py-1 rounded-full bg-black/[0.06]">
-                    <Text className="text-[10px] font-bold uppercase tracking-[1px] text-black/35">Custom</Text>
+                    <Text className="text-[10px] font-bold uppercase tracking-[1px] text-black/35 dark:text-white/35">Custom</Text>
                   </View>
                 </View>
               </Card>
@@ -125,15 +116,15 @@ export default function HomeScreen() {
 
 function HomeHeader() {
   return (
-    <View className="gap-6">
+      <View className="gap-5">
       <View className="flex-row items-end justify-between gap-5">
         <View className="flex-1 gap-1.5">
-          <Text className="text-xs font-bold uppercase tracking-[1.8px] text-black/35">Today</Text>
-          <Text className="text-[24px] font-bold leading-[28px] tracking-[-0.7px] text-black">Good afternoon, Preyanshu</Text>
+          <Text className="text-xs font-bold uppercase tracking-[1.8px] text-black/35 dark:text-white/35">Today</Text>
+          <Text className="text-[24px] font-bold leading-[28px] tracking-[-0.7px] text-black dark:text-[#FFF9ED]">Good afternoon, Preyanshu</Text>
         </View>
         <View className="items-end pb-1">
-          <Text className="text-sm font-bold text-black">31°</Text>
-          <Text className="text-xs font-medium text-black/35">Clear</Text>
+          <Text className="text-sm font-bold text-black dark:text-[#FFF9ED]">31°</Text>
+          <Text className="text-xs font-medium text-black/35 dark:text-white/35">Clear</Text>
         </View>
       </View>
     </View>
@@ -142,44 +133,26 @@ function HomeHeader() {
 
 function AskCard() {
   return (
-    <View className="flex-row items-center gap-3">
+    <View className="flex-row items-center gap-2.5">
       <Pressable
         onPress={() => router.push("/chat")}
-        className="flex-1 min-h-12 flex-row items-center gap-3 overflow-hidden rounded-full bg-black/[0.04] px-4 active:scale-[0.98]"
+        className="flex-1 min-h-12 flex-row items-center gap-2.5 overflow-hidden rounded-full bg-black/[0.04] px-4 active:scale-[0.96]"
       >
         <GlassLayer />
-        <SymbolView name="sparkles" tintColor="rgba(0,0,0,0.58)" style={{ width: 17, height: 17 }} />
-        <Text className="flex-1 text-xs font-semibold text-black/55">Ask Alta what to wear tonight</Text>
+        <WardrobeIcon name="sparkles" color={adaptiveColors.secondaryLabel} size={17} />
+        <Text className="flex-1 text-xs font-semibold text-black/55 dark:text-white/55">Ask Alta what to wear tonight</Text>
         <View className="h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-black">
-          <SymbolView name="arrow.right" tintColor="#FFFDF3" style={{ width: 15, height: 15 }} />
+          <WardrobeIcon name="arrow.right" color={adaptiveColors.onAccent} size={15} />
         </View>
       </Pressable>
-      <Pressable
-        accessibilityLabel="Scan clothes"
-        onPress={() => router.push("/scan")}
-        className="h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-black/[0.04] active:scale-[0.96]"
-      >
-        <GlassLayer />
-        <SymbolView name="camera" tintColor="rgba(0,0,0,0.58)" style={{ width: 18, height: 18 }} />
-      </Pressable>
-      <Pressable
-        accessibilityLabel="Build outfit"
-        onPress={() => router.push("/builder")}
-        className="h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-black active:scale-[0.96]"
-      >
-        <GlassLayer tintColor="#000000" />
-        <SymbolView name="plus" tintColor="#FFFDF3" style={{ width: 18, height: 18 }} />
-      </Pressable>
+      <GlassButton icon="camera" label="Scan clothes" onPress={() => router.push("/scan")} size={44} />
+      <GlassButton icon="plus" label="Build outfit" onPress={() => router.push("/builder")} size={44} variant="dark" />
     </View>
   );
 }
 
 function SegmentedControl({ mode, onChange }: { mode: OutfitViewMode; onChange: (mode: OutfitViewMode) => void }) {
-  return (
-    <View className="overflow-hidden rounded-full border border-black/10 bg-black/[0.06]" style={{ width: 128, height: 32 }}>
-      <SegmentedControlIOS values={["Look", "Items"]} selectedIndex={mode === "look" ? 0 : 1} onChange={(event) => onChange(event.nativeEvent.selectedSegmentIndex === 0 ? "look" : "items")} tintColor="#000000" backgroundColor="rgba(0,0,0,0.06)" fontStyle={{ color: "rgba(0,0,0,0.48)", fontSize: 12, fontWeight: "600" }} activeFontStyle={{ color: "#FFFFFF", fontSize: 12, fontWeight: "700" }} style={{ width: "100%", height: "100%" }} />
-    </View>
-  );
+  return <NativePicker value={mode} onValueChange={onChange} options={[{ label: "Look", value: "look" }, { label: "Items", value: "items" }]} label="Preview mode" />;
 }
 
 function LookPreview({ items }: { items: ClothingItem[] }) {
@@ -201,8 +174,8 @@ function ItemTile({ item }: { item: ClothingItem }) {
     <Pressable onPress={() => router.push(`/item/${item.id}`)} className="w-[48%] gap-2 rounded-[16px] p-3 active:scale-[0.97]">
       <ItemImage imageUrl={item.imageUrl} label={item.name} size="small" />
       <View className="gap-1">
-        <Text numberOfLines={1} className="text-xs font-bold text-black">{item.name}</Text>
-        <Text className="text-xs font-medium capitalize text-black/42">{item.color}</Text>
+        <Text numberOfLines={1} className="text-xs font-bold text-black dark:text-[#FFF9ED]">{item.name}</Text>
+        <Text className="text-xs font-medium capitalize text-black/42 dark:text-white/42">{item.color}</Text>
       </View>
     </Pressable>
   );

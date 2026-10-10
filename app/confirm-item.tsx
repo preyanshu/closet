@@ -1,12 +1,11 @@
-import { Button, Card, Screen, SectionHeader } from "@/components/ui";
+import { adaptiveColors, radius, spacing, Button, Card, FormField, ModalHeader, NativePicker, NativeSwitch, Screen, WardrobeIcon } from "@/components/ui";
 import { useCloset } from "@/state/closet-context";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { SymbolView } from "expo-symbols";
 import { router } from "expo-router";
-import SegmentedControl from "@react-native-segmented-control/segmented-control";
 import { useState } from "react";
-import { KeyboardAvoidingView, Platform, Pressable, Switch, Text, TextInput, View } from "react-native";
+import { KeyboardAvoidingView, Platform, Pressable, Text, View } from "react-native";
 import { type ClothingCategory } from "@/data/mock";
 
 const categories: ClothingCategory[] = ["top", "bottom", "outerwear", "shoes", "accessory"];
@@ -19,6 +18,11 @@ const categoryShortLabels: Record<ClothingCategory, string> = {
 };
 const colorOptions = ["black", "white", "navy", "gray", "brown", "cream", "blue", "camel"];
 const aestheticOptions = ["old-money", "office", "streetwear", "clean-girl", "minimal", "evening"];
+const categoryOptions = categories.map((value) => ({ label: categoryShortLabels[value], value }));
+const swatchColor = (color: string) => {
+  const map: Record<string, string> = { white: "#F5F1E8", navy: "#1F2A44", gray: "#8E8E93", brown: "#6B4A2F", cream: "#EFE3CB", blue: "#3B6EA8", camel: "#C08A4E", black: "#0E0D0B" };
+  return map[color] ?? color;
+};
 
 export default function ConfirmItemScreen() {
   const { addItem } = useCloset();
@@ -58,57 +62,44 @@ export default function ConfirmItemScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: "#FFFDF3" }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-      <Screen>
-        <SectionHeader eyebrow="Confirm item" title="Review details" />
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: adaptiveColors.canvas }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+      <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
+        <ModalHeader title="Review details" subtitle="Edit each detail before adding this piece." />
 
-        <Pressable onPress={pickImage} style={{ width: "100%", aspectRatio: 1, borderRadius: 20, backgroundColor: "#F6F1E4", overflow: "hidden", alignItems: "center", justifyContent: "center" }}>
+        <Pressable onPress={pickImage} style={{ width: "100%", aspectRatio: 1, borderRadius: 20, backgroundColor: adaptiveColors.surfaceMuted, overflow: "hidden", alignItems: "center", justifyContent: "center" }}>
           {pickedImage ? (
-            <Text style={{ fontSize: 13, color: "rgba(0,0,0,0.4)" }}>Image selected ✓</Text>
+            <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>Image selected ✓</Text>
           ) : (
             <View style={{ alignItems: "center", gap: 8 }}>
-              <SymbolView name="camera" tintColor="rgba(0,0,0,0.2)" style={{ width: 48, height: 48 }} />
-              <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.35)" }}>Tap to choose photo</Text>
+              <WardrobeIcon name="camera" color={adaptiveColors.tertiaryLabel} size={42} />
+              <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>Tap to choose photo</Text>
             </View>
           )}
         </Pressable>
 
-        <Card className="gap-4">
-          <Field label="Name" value={name} onChangeText={setName} />
+        <Card className="gap-5">
+          <FormField label="Name" value={name} onChangeText={setName} />
+          <FormField label="Price" value={price} onChangeText={setPrice} keyboardType="number-pad" placeholder="0" accessibilityHint="Price in dollars" />
 
-          <View style={{ gap: 6 }}>
-            <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.5)" }}>Price</Text>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 16, borderWidth: 1, borderColor: "rgba(0,0,0,0.1)", backgroundColor: "#FFFFFA", paddingHorizontal: 16 }}>
-              <Text style={{ fontSize: 16, fontWeight: "600", color: "rgba(0,0,0,0.35)" }}>$</Text>
-              <TextInput value={price} onChangeText={setPrice} keyboardType="number-pad" placeholder="0" placeholderTextColor="rgba(0,0,0,0.3)" style={{ flex: 1, paddingVertical: 12, fontSize: 15, fontWeight: "500", color: "#000" }} />
-            </View>
+          <View style={{ gap: 8 }}>
+            <Text style={{ fontSize: 13, fontWeight: "700", color: adaptiveColors.secondaryLabel }}>Category</Text>
+            <NativePicker value={category} onValueChange={setCategory} options={categoryOptions} label="Category" />
           </View>
 
           <View style={{ gap: 8 }}>
-            <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.5)" }}>Category</Text>
-            <SegmentedControl
-              values={categories.map((c) => categoryShortLabels[c])}
-              selectedIndex={categories.indexOf(category)}
-              onChange={(event) => setCategory(categories[event.nativeEvent.selectedSegmentIndex])}
-              tintColor="#000000"
-              backgroundColor="rgba(0,0,0,0.05)"
-              fontStyle={{ color: "rgba(0,0,0,0.5)", fontSize: 12, fontWeight: "600" }}
-              activeFontStyle={{ color: "#FFFDF3", fontSize: 12, fontWeight: "700" }}
-            />
-          </View>
-
-          <View style={{ gap: 8 }}>
-            <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.5)" }}>Color</Text>
+            <Text style={{ fontSize: 13, fontWeight: "700", color: adaptiveColors.secondaryLabel }}>Color</Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {colorOptions.map((c) => (
-                <Pressable key={c} onPress={() => setColor(c)} style={{ width: 36, height: 36, borderRadius: 999, backgroundColor: c === "#000" ? "#000" : c, borderWidth: c === color ? 3 : 1, borderColor: c === color ? "#000" : "rgba(0,0,0,0.1)" }} />
+                <Pressable key={c} accessibilityRole="radio" accessibilityLabel={`${c} color`} accessibilityState={{ selected: c === color }} onPress={() => setColor(c)} style={{ width: 38, height: 38, borderRadius: radius.pill, backgroundColor: swatchColor(c), borderWidth: c === color ? 3 : 1, borderColor: c === color ? adaptiveColors.label : "rgba(0,0,0,0.1)", alignItems: "center", justifyContent: "center" }}>
+                  {c === color ? <WardrobeIcon name="checkmark" color={c === "white" || c === "cream" ? adaptiveColors.label : "#FFF"} size={15} weight="bold" /> : null}
+                </Pressable>
               ))}
             </View>
           </View>
 
           <View style={{ gap: 8 }}>
-            <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.5)" }}>Aesthetics</Text>
-            <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", backgroundColor: "#FFFFFA", paddingHorizontal: 16 }}>
+            <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>Aesthetics</Text>
+            <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: adaptiveColors.border, backgroundColor: adaptiveColors.surface, paddingHorizontal: 16 }}>
               {aestheticOptions.map((aesthetic, index) => {
                 const selected = selectedAesthetics.includes(aesthetic);
                 return (
@@ -123,15 +114,13 @@ export default function ConfirmItemScreen() {
                       borderBottomColor: "rgba(0,0,0,0.05)",
                     }}
                   >
-                    <Text style={{ fontSize: 15, fontWeight: "600", color: "#000", textTransform: "capitalize" }}>{aesthetic.replace("-", " ")}</Text>
-                    <Switch
+                    <Text style={{ fontSize: 15, fontWeight: "600", color: adaptiveColors.label, textTransform: "capitalize" }}>{aesthetic.replace("-", " ")}</Text>
+                    <NativeSwitch
                       value={selected}
                       onValueChange={(value) => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                         toggleAesthetic(aesthetic);
                       }}
-                      trackColor={{ false: "#E4E4EA", true: "#000000" }}
-                      thumbColor="#FFFFFF"
                     />
                   </View>
                 );
@@ -143,14 +132,5 @@ export default function ConfirmItemScreen() {
         <Button onPress={save} icon="checkmark">Save to closet</Button>
       </Screen>
     </KeyboardAvoidingView>
-  );
-}
-
-function Field({ label, value, onChangeText }: { label: string; value: string; onChangeText: (t: string) => void }) {
-  return (
-    <View style={{ gap: 6 }}>
-      <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.5)" }}>{label}</Text>
-      <TextInput value={value} onChangeText={onChangeText} style={{ borderRadius: 16, borderWidth: 1, borderColor: "rgba(0,0,0,0.1)", backgroundColor: "#FFFFFA", paddingHorizontal: 16, paddingVertical: 12, fontSize: 15, fontWeight: "500", color: "#000" }} placeholderTextColor="rgba(0,0,0,0.3)" />
-    </View>
   );
 }

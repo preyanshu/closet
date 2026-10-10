@@ -3,8 +3,9 @@ import { createContext, type PropsWithChildren, use, useCallback, useMemo, useSt
 
 type ClosetContextValue = {
   items: ClothingItem[];
-  addMockItem: () => ClothingItem;
   addItem: (item: ClothingItem) => void;
+  addedMessage: string | null;
+  setAddedMessage: (message: string | null) => void;
   myLooks: Outfit[];
   addMyLook: (outfit: Outfit) => void;
   removeMyLook: (outfitId: string) => void;
@@ -21,27 +22,12 @@ type ClosetContextValue = {
 const ClosetContext = createContext<ClosetContextValue | null>(null);
 
 export function ClosetProvider({ children }: PropsWithChildren) {
-  const [items, setItems] = useState<ClothingItem[]>(clothingItems);
+  const [items, setItems] = useState<ClothingItem[]>(() => [...clothingItems]);
+  const [addedMessage, setAddedMessage] = useState<string | null>(null);
   const [myLooks, setMyLooks] = useState<Outfit[]>([]);
-  const [savedLookIds, setSavedLookIds] = useState<Set<string>>(new Set());
-  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [savedLookIds, setSavedLookIds] = useState<Set<string>>(() => new Set(["mock-album-office-01", "mock-album-casual-01"]));
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => new Set(["item-02", "item-07", "item-10"]));
   const [stylePreferences, setStylePreferences] = useState<string[]>(["minimal", "old-money"]);
-
-  const addMockItem = useCallback((): ClothingItem => {
-    const newItem: ClothingItem = {
-      id: `mock-scan-${Date.now()}`,
-      name: "Scanned black tee",
-      category: "top",
-      color: "black",
-      aesthetics: ["minimal", "streetwear"],
-      imageUrl: "mock://scanned-black-tee",
-      lastWorn: null,
-      price: 49,
-      wearCount: 0,
-    };
-    setItems((prev) => [newItem, ...prev]);
-    return newItem;
-  }, []);
 
   const addItem = useCallback((item: ClothingItem) => {
     setItems((prev) => [item, ...prev]);
@@ -79,8 +65,9 @@ export function ClosetProvider({ children }: PropsWithChildren) {
 
   const value = useMemo<ClosetContextValue>(() => ({
     items,
-    addMockItem,
     addItem,
+    addedMessage,
+    setAddedMessage,
     myLooks,
     addMyLook,
     removeMyLook,
@@ -92,7 +79,7 @@ export function ClosetProvider({ children }: PropsWithChildren) {
     isFavorite,
     stylePreferences,
     setStylePreferences,
-  }), [items, myLooks, savedLookIds, favoriteIds, stylePreferences, addMockItem, addItem, addMyLook, removeMyLook, toggleSavedLook, isSavedLook, toggleFavorite, isFavorite]);
+  }), [items, addedMessage, myLooks, savedLookIds, favoriteIds, stylePreferences, addItem, addMyLook, removeMyLook, toggleSavedLook, isSavedLook, toggleFavorite, isFavorite]);
 
   return <ClosetContext value={value}>{children}</ClosetContext>;
 }

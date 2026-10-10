@@ -6,13 +6,10 @@
     "orientation": "portrait",
     "scheme": "wardrobe",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
-    "android": {
-      "edgeToEdgeEnabled": true
-    },
+    "android": {},
     "plugins": [
       "expo-router",
       [
@@ -26,7 +23,10 @@
         {
           "cameraPermission": "Allow Wardrobe to use the camera to scan and add your clothes."
         }
-      ]
+      ],
+      "expo-image",
+      "expo-status-bar",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
