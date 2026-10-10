@@ -21,6 +21,8 @@ export type OutfitContext = {
   styleTags?: string[];
   /** Item the user explicitly wants to wear; guarantees inclusion. */
   anchorItemId?: string;
+  /** Additional pieces that must appear in every composed outfit (multi-anchor). */
+  includeItemIds?: string[];
   count?: number;
 };
 
@@ -192,18 +194,33 @@ function selectAccessories(pool: Item[], context: OutfitContext): Item[] {
   return accessories;
 }
 
-function ensureAnchor(items: Item[], context: OutfitContext, pool: Item[]): Item[] {
-  if (!context.anchorItemId || items.some((item) => item.id === context.anchorItemId)) return items;
-  const anchor = pool.find((item) => item.id === context.anchorItemId);
-  if (!anchor) return items;
+function wantedIds(context: OutfitContext): string[] {
+  const wanted = new Set<string>();
+  if (context.anchorItemId) wanted.add(context.anchorItemId);
+  for (const id of context.includeItemIds ?? []) wanted.add(id);
+  return [...wanted];
+}
 
-  const sameRoleIndex = items.findIndex((item) => item.role === anchor.role);
-  if (sameRoleIndex >= 0) {
-    const next = [...items];
-    next[sameRoleIndex] = anchor;
-    return next;
+function conflictsWith(items: Item[], item: Item): boolean {
+  if (item.role === "one_piece") return items.some((entry) => entry.role === "base_top" || entry.role === "bottom");
+  if (item.role === "base_top" || item.role === "bottom") return items.some((entry) => entry.role === "one_piece");
+  return false;
+}
+
+function ensureIncluded(items: Item[], context: OutfitContext, pool: Item[]): Item[] {
+  const wanted = wantedIds(context);
+  if (wanted.length === 0) return items;
+
+  for (const id of wanted) {
+    if (items.some((item) => item.id === id)) continue;
+    const anchor = pool.find((item) => item.id === id);
+    if (!anchor || conflictsWith(items, anchor)) continue;
+
+    const sameRoleIndex = items.findIndex((item) => item.role === anchor.role);
+    if (sameRoleIndex >= 0) items[sameRoleIndex] = anchor;
+    else items.push(anchor);
   }
-  return [...items, anchor];
+  return items;
 }
 
 function buildBase(core: Item[], pool: Item[], context: OutfitContext): Item[] {
@@ -212,7 +229,7 @@ function buildBase(core: Item[], pool: Item[], context: OutfitContext): Item[] {
   if (shoe) items.push(shoe);
   items.push(...selectLayers(pool, context));
   items.push(...selectAccessories(pool, context));
-  return orderItems(ensureAnchor(items, context, pool));
+  return orderItems(ensureIncluded(items, context, pool));
 }
 
 function buildCandidates(pool: Item[], context: OutfitContext): Item[][] {
@@ -220,19 +237,27 @@ function buildCandidates(pool: Item[], context: OutfitContext): Item[][] {
   const bottoms = byRole(pool, "bottom");
   const onepieces = byRole(pool, "one_piece");
   const candidates: Item[][] = [];
+  const seen = new Set<string>();
   const MAX = 60;
+
+  const push = (items: Item[]) => {
+    const signature = items.map((item) => item.id).join(",");
+    if (seen.has(signature)) return;
+    seen.add(signature);
+    candidates.push(items);
+  };
 
   for (const bottom of bottoms) {
     const topPicks = [...tops].sort((a, b) => itemScore(b, context) - itemScore(a, context)).slice(0, 3);
     for (const top of topPicks) {
-      candidates.push(buildBase([top, bottom], pool, context));
+      push(buildBase([top, bottom], pool, context));
       if (candidates.length >= MAX) break;
     }
     if (candidates.length >= MAX) break;
   }
 
   for (const onepiece of onepieces) {
-    candidates.push(buildBase([onepiece], pool, context));
+    push(buildBase([onepiece], pool, context));
     if (candidates.length >= MAX) break;
   }
 
@@ -254,7 +279,11 @@ function outfitScore(items: Item[], context: OutfitContext): number {
   if (hasMid && hasOuter) score += 1;
   if (!hasMid && !hasOuter && context.season === "cold") score -= 1;
 
-  if (context.anchorItemId) score += items.some((item) => item.id === context.anchorItemId) ? 4 : -1000;
+  const wanted = wantedIds(context);
+  if (wanted.length > 0) {
+    const missing = wanted.filter((id) => !items.some((item) => item.id === id));
+    score += missing.length === 0 ? 4 : -1000 - missing.length;
+  }
 
   return score;
 }
@@ -263,9 +292,64 @@ function coreId(items: Item[]): string | undefined {
   return (items.find((item) => item.role === "bottom") ?? items.find((item) => item.role === "one_piece"))?.id;
 }
 
-function diversify(ranked: Candidate[], count: number): Candidate[] {
+const ACCESSORY_ROLES: ItemRole[] = ["bag", "belt", "hat", "eyewear", "scarf", "jewelry", "socks"];
+
+function generateVariants(items: Item[], pool: Item[], context: OutfitContext): Item[][] {
+  const variants: Item[][] = [];
+  const used = new Set(items.filter((item) => ACCESSORY_ROLES.includes(item.role)).map((item) => item.id));
+  const ranked = pool
+    .filter((item) => ACCESSORY_ROLES.includes(item.role) && !used.has(item.id))
+    .sort((a, b) => itemScore(b, context) - itemScore(a, context) || a.id.localeCompare(b.id));
+
+  for (const alt of ranked.slice(0, 3)) {
+    const next = [...items];
+    const sameRoleIndex = next.findIndex((item) => item.role === alt.role);
+    if (sameRoleIndex >= 0) next[sameRoleIndex] = alt;
+    else {
+      const bag = next.findIndex((item) => item.role === "bag");
+      if (bag >= 0) next[bag] = alt;
+      else next.push(alt);
+    }
+    variants.push(orderItems(next));
+  }
+
+  const bag = items.find((item) => item.role === "bag");
+  if (bag) variants.push(items.filter((item) => item.id !== bag.id));
+
+  const outer = items.find((item) => item.role === "outer_layer");
+  if (outer) variants.push(items.filter((item) => item.id !== outer.id));
+
+  if (!items.some((item) => item.role === "mid_layer")) {
+    const mid = pickBest(byRole(pool, "mid_layer"), context);
+    if (mid) variants.push(orderItems([...items, mid]));
+  }
+
+  return variants;
+}
+
+function fillWithAlternates(chosen: Candidate[], pool: Item[], context: OutfitContext, count: number): Candidate[] {
+  while (chosen.length < count && chosen.length > 0) {
+    let added = false;
+    for (const candidate of chosen) {
+      for (const alt of generateVariants(candidate.items, pool, context)) {
+        const signature = alt.map((item) => item.id).join(",");
+        if (chosen.some((entry) => entry.items.map((item) => item.id).join(",") === signature)) continue;
+        chosen.push({ items: alt, score: outfitScore(alt, context) });
+        added = true;
+        if (chosen.length >= count) break;
+      }
+      if (chosen.length >= count) break;
+    }
+    if (!added) break;
+  }
+  return chosen;
+}
+
+function diversify(ranked: Candidate[], count: number, context: OutfitContext): Candidate[] {
+  const wanted = wantedIds(context);
+  const candidates = wanted.length > 0 ? ranked.filter((candidate) => wanted.every((id) => candidate.items.some((item) => item.id === id))) : ranked;
   const chosen: Candidate[] = [];
-  const remaining = [...ranked];
+  const remaining = [...candidates];
   const usedCore = new Set<string>();
   const usedTop = new Set<string>();
 
@@ -406,9 +490,9 @@ export function composeOutfits(context: OutfitContext = {}, items: Item[] = clot
     .map((candidateItems) => ({ items: candidateItems, score: outfitScore(candidateItems, context) }))
     .sort((a, b) => b.score - a.score);
 
-  const chosen = diversify(candidates, count);
+  const chosen = diversify(candidates, count, context);
   if (chosen.length === 0) return [];
-
+  fillWithAlternates(chosen, pool, context, count);
   while (chosen.length < count) chosen.push({ ...chosen[0] });
 
   const personalities = personalityLabels(chosen);

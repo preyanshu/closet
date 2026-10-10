@@ -147,7 +147,32 @@ render blank rows for the demo wardrobe.
   badge (L1, L2…) on layered pieces. Demo/custom looks without `items[]` fall back to flat
   `itemIds` order.
 
-## Deferred, not dropped (updated)
+## PR5 — Builder integration (Pick → Generate → batch → Save)
+
+### Engine additions (`services/outfit-engine.ts`)
+- `OutfitContext.includeItemIds: string[]` — multi-anchor. `ensureIncluded` now guarantees
+  every wanted id appears (replacing a same-role piece or appending), and `outfitScore`
+  excludes candidates missing any wanted id (hard penalty). A conflict rule keeps a
+  `one_piece` silhouette from gaining a `base_top`/`bottom` (and vice versa).
+- Candidate de-duplication (same ordered item-set = one candidate).
+- `generateVariants` + `fillWithAlternates`: when diversification can't reach the requested
+  `count` (e.g. the user pinned top+bottom+shoes, leaving little variety), the batch is
+  topped up with real alternatives — accessory swaps (bag ↔ belt ↔ jewelry), drop the bag,
+  drop/adjust the outer layer, add a mid layer — never silent clones.
+
+### Builder (`app/builder.tsx`)
+- Generate no longer fakes a 1.4s "avatar" and hardcoded `demoDetails`. It calls
+  `composeOutfits({ occasion: "everyday", styleTags: taste.ids, anchorItemId: selected[0],
+  includeItemIds: rest, count: 3 }, items)` after a brief 900ms composition animation.
+- Preview shows the real batch: three selectable "Option N" cards (layer-ordered piece
+  thumbnails, grounded description, 2–3 tags). Picking one sets `pickedId`; Save persists the
+  actual outfit (real label/description/tags/metadata/items, new `my-look-*` id) into closet
+  state. "Edit pieces" returns to select.
+- Avatar copy removed ("See it on an avatar" → "See outfit ideas", "Creating your outfit
+  avatar" → "Composing outfit ideas").
+
+### Deferred, not dropped (updated)
 - D1/R2 bindings + worker auth → later.
-- Builder integration (pick pieces, tap Generate, batch) → PR5.
+- AI reranker over the rule engine + occasion/season/weather chips in the builder → later.
 - Wear-event capture wiring → PR6.
+- Avatar rendering → deferred (composition-first).

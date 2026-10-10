@@ -1,7 +1,6 @@
 import { Button, CircularGlassButton, EmptyState, ItemImage, Screen, WardrobeIcon, motion, radius, spacing, type as typography } from "@/components/ui";
-import { itemImageSource } from "@/services/item-image";
-import { Image } from "expo-image";
 import { aesthetics, categoryLabels, type ClothingCategory, type Item, type Outfit } from "@/data/mock";
+import { composeOutfits } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
 import { useWardrobeTheme } from "@/theme/wardrobe-theme";
 import * as Haptics from "expo-haptics";
@@ -19,12 +18,6 @@ const slots: { category: ClothingCategory; label: string }[] = [
 ];
 const emptySelection: Record<ClothingCategory, string[]> = { top: [], outerwear: [], bottom: [], shoes: [], accessory: [] };
 const aestheticLabel = (id: string) => aesthetics.find((aesthetic) => aesthetic.id === id)?.label ?? id;
-const demoDetails = {
-  label: "Everyday, elevated",
-  description: "Easy proportions and warm neutrals create a relaxed, polished look. A considered mix of texture and small finishing touches takes it from a coffee run to a casual dinner.",
-  tags: ["Minimal", "Casual", "Everyday", "Warm neutrals"],
-  metadata: { occasion: "Coffee & casual dinners", season: "Spring / Autumn", palette: "Cream · camel · charcoal", stylingNote: "Keep the base simple. Add a loose outer layer and let one accessory be the focal point.", demo: true },
-};
 
 export default function BuilderScreen() {
   const { items, addMyLook } = useCloset();
@@ -56,9 +49,10 @@ export default function BuilderScreen() {
   const request = useRef<AbortController | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const [phase, setPhase] = useState<"select" | "generating" | "preview">("select");
-  const [previewUri, setPreviewUri] = useState<string>();
+  const [suggestions, setSuggestions] = useState<Outfit[]>([]);
+  const [pickedId, setPickedId] = useState<string | null>(null);
   const [error, setError] = useState<string>();
-  const progress = "Putting the finishing touches on your preview…";
+  const progress = "Composing outfits from your closet…";
   useEffect(() => () => request.current?.abort(), []);
   const chosen = useMemo(() => slots.flatMap(({ category }) => selectedIds[category].map(id => items.find(item => item.id === id))).filter((item): item is Item => Boolean(item)), [items, selectedIds]);
   const categoryItems = useMemo(() => items.filter((item) => item.category === activeCategory), [items, activeCategory]);
@@ -69,9 +63,14 @@ export default function BuilderScreen() {
     const counts = new Map<string, number>();
     for (const item of chosen) for (const id of item.styleTags) counts.set(id, (counts.get(id) ?? 0) + 1);
     const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
-    return { aestheticId: ranked[0]?.[0] ?? "custom", tags: ranked.slice(0, 3).map(([id]) => aestheticLabel(id)) };
+    return { aestheticId: ranked[0]?.[0] ?? "custom", ids: ranked.slice(0, 3).map(([id]) => id), tags: ranked.slice(0, 3).map(([id]) => aestheticLabel(id)) };
   }, [chosen]);
-  const lookLabel = chosen.length ? `${aestheticLabel(taste.aestheticId)} look` : "New outfit";
+  const suggestionItems = (outfit: Outfit) => {
+    const refs = outfit.items?.length ? [...outfit.items].sort((a, b) => (a.layerOrder ?? 0) - (b.layerOrder ?? 0) || a.itemId.localeCompare(b.itemId)) : [];
+    const ordered = refs.length ? refs.map((ref) => ref.itemId) : outfit.itemIds;
+    return ordered.map((id) => items.find((item) => item.id === id)).filter((item): item is Item => Boolean(item));
+  };
+  const pickedSuggestion = suggestions.find((outfit) => outfit.id === pickedId) ?? suggestions[0];
   const stacked = fontScale > 1.5;
   const feedback = () => { if (process.env.EXPO_OS === "ios") void Haptics.selectionAsync(); };
   const selectCategory = (category: ClothingCategory) => {
@@ -88,7 +87,7 @@ export default function BuilderScreen() {
     contentOffset.value = withTiming(0, config);
   };
   const equip = (item: Item) => {
-    feedback(); setPreviewUri(undefined); setError(undefined);
+    feedback(); setError(undefined);
     setSelectedIds(current => {
       const ids = current[item.category];
       const next = ids.includes(item.id) ? ids.filter(id => id !== item.id) : item.category === "outerwear" || item.category === "accessory" ? [...ids, item.id] : [item.id];
@@ -102,20 +101,47 @@ export default function BuilderScreen() {
     setError(undefined); setPhase("generating"); scrollRef.current?.scrollTo({ y: 0, animated: true });
     try {
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => { controller.signal.removeEventListener("abort", cancel); resolve(); }, 1400);
+        const timer = setTimeout(() => { controller.signal.removeEventListener("abort", cancel); resolve(); }, 900);
         const cancel = () => { clearTimeout(timer); reject(new Error("Cancelled")); };
         controller.signal.addEventListener("abort", cancel, { once: true });
       });
-      if (!controller.signal.aborted) { setPreviewUri("@/assets/look-preview.png"); setPhase("preview"); }
+      if (controller.signal.aborted) return;
+      const looks = composeOutfits(
+        {
+          occasion: "everyday",
+          styleTags: taste.ids,
+          anchorItemId: chosen[0]?.id,
+          includeItemIds: chosen.slice(1).map((item) => item.id),
+          count: 3,
+        },
+        items,
+      );
+      if (looks.length === 0) throw new Error("Not enough wearable pieces to compose a look yet.");
+      setSuggestions(looks); setPickedId(null); setPhase("preview");
     } catch (cause) {
       setPhase("select");
-      setError(controller.signal.aborted ? "Generation stopped. Your pieces are kept; you can try again." : cause instanceof Error ? cause.message : "Couldn't generate your avatar. Try again.");
+      setError(controller.signal.aborted ? "Generation stopped. Your pieces are kept; you can try again." : cause instanceof Error ? cause.message : "Couldn't compose outfit ideas. Try again.");
     } finally { request.current = null; }
   };
   const save = () => {
-    if (!chosen.length || !previewUri || phase !== "preview" || saving.current) return;
+    if (!chosen.length || !pickedSuggestion || phase !== "preview" || saving.current) return;
     saving.current = true;
-    const outfit: Outfit = { id: `my-look-${Date.now()}`, source: "manual", isDemo: false, previewUri, ...demoDetails, itemIds: chosen.map((item) => item.id), aestheticId: taste.aestheticId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const now = new Date().toISOString();
+    const outfit: Outfit = {
+      id: `my-look-${Date.now()}`,
+      ownerId: "local-demo",
+      label: pickedSuggestion.label,
+      source: "manual",
+      description: pickedSuggestion.description,
+      itemIds: pickedSuggestion.itemIds,
+      items: pickedSuggestion.items,
+      aestheticId: taste.aestheticId,
+      tags: pickedSuggestion.tags,
+      metadata: pickedSuggestion.metadata,
+      isDemo: false,
+      createdAt: now,
+      updatedAt: now,
+    };
     addMyLook(outfit);
     if (process.env.EXPO_OS === "ios") void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     close();
@@ -133,10 +159,10 @@ export default function BuilderScreen() {
         <View style={styles.header}>
           <View style={{ flex: 1, gap: 6 }}>
             <Text accessibilityRole="header" style={[styles.title, { color: colors.label }]}>
-              {phase === "preview" ? "The finished look." : phase === "generating" ? "Coming together." : "Make it yours."}
+              {phase === "preview" ? "Pick your favorite." : phase === "generating" ? "Coming together." : "Make it yours."}
             </Text>
             <Text style={{ ...typography.callout, fontWeight: "400", color: colors.secondaryLabel }}>
-              {phase === "preview" ? "Styled for your everyday." : phase === "generating" ? "A little time for the final details." : "Your wardrobe. A new combination."}
+              {phase === "preview" ? "Three looks built around what you picked." : phase === "generating" ? "Composing from your closet." : "Your wardrobe. A new combination."}
             </Text>
           </View>
           <CircularGlassButton icon="xmark" label="Close outfit builder" onPress={close} />
@@ -223,35 +249,45 @@ export default function BuilderScreen() {
               {chosen.slice(0, 3).map(item => <ItemImage key={item.id} imageUrl={item.displayAssetUri} label={item.name} contentFit="contain" style={{ width: 72, height: 92, aspectRatio: undefined, borderWidth: 0, borderRadius: radius.sm, backgroundColor: colors.surface }} />)}
             </View>
             <ActivityIndicator color={colors.accent} />
-            <Text style={{ ...typography.sectionTitle, color: colors.label, textAlign: "center" }}>Creating your outfit avatar</Text>
+            <Text style={{ ...typography.sectionTitle, color: colors.label, textAlign: "center" }}>Composing outfit ideas</Text>
             <Text accessibilityLiveRegion="polite" style={{ ...typography.callout, fontWeight: "400", color: colors.secondaryLabel, textAlign: "center" }}>{progress}</Text>
             <Pressable accessibilityRole="button" onPress={() => request.current?.abort()} style={styles.textButton}>
               <Text style={{ ...typography.callout, color: colors.label }}>Cancel</Text>
             </Pressable>
           </View>
-        ) : previewUri ? (
-          <View style={{ gap: spacing.sm }}>
-            <Image source={itemImageSource(previewUri)} accessibilityLabel="Sample outfit preview" contentFit="contain" style={{ width: "100%", aspectRatio: 0.9, borderRadius: radius.lg, backgroundColor: colors.surfaceMuted }} />
+        ) : suggestions.length > 0 ? (
+          <View style={{ gap: spacing.lg }}>
             <View style={styles.previewCaption}>
-              <Text style={{ ...typography.caption, fontWeight: "400", color: colors.secondaryLabel, flex: 1 }}>Demo preview · sample AI styling</Text>
-              <Pressable accessibilityRole="button" onPress={() => { setPhase("select"); setPreviewUri(undefined); }} style={styles.textButton}>
+              <Text style={{ ...typography.caption, fontWeight: "400", color: colors.secondaryLabel, flex: 1 }}>Composed from your closet · pick one to save</Text>
+              <Pressable accessibilityRole="button" onPress={() => { setPhase("select"); setSuggestions([]); setPickedId(null); }} style={styles.textButton}>
                 <Text style={{ ...typography.callout, color: colors.label }}>Edit pieces</Text>
               </Pressable>
             </View>
-            <View style={{ gap: spacing.md }}>
-              <Text style={{ ...typography.sectionTitle, color: colors.label }}>{demoDetails.label}</Text>
-              <Text style={{ ...typography.body, fontWeight: "400", color: colors.secondaryLabel }}>{demoDetails.description}</Text>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
-                {demoDetails.tags.map(tag => <View key={tag} style={{ backgroundColor: colors.surfaceMuted, paddingHorizontal: 12, paddingVertical: 7, borderRadius: radius.pill }}><Text style={{ ...typography.caption, color: colors.label }}>{tag}</Text></View>)}
-              </View>
-              <View style={{ gap: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.separator, paddingTop: spacing.md }}>
-                {[["Wear it to", demoDetails.metadata.occasion], ["Season", demoDetails.metadata.season], ["Palette", demoDetails.metadata.palette]].map(([label, value]) => <View key={label} style={{ flexDirection: "row", gap: 16 }}><Text style={{ ...typography.callout, color: colors.secondaryLabel, width: 80 }}>{label}</Text><Text style={{ ...typography.callout, color: colors.label, flex: 1 }}>{value}</Text></View>)}
-              </View>
-              <View style={{ padding: spacing.md, gap: spacing.xs, backgroundColor: colors.surfaceMuted, borderRadius: radius.md }}>
-                <Text style={{ ...typography.callout, color: colors.label }}>Styling note</Text>
-                <Text style={{ ...typography.body, fontWeight: "400", color: colors.secondaryLabel }}>{demoDetails.metadata.stylingNote}</Text>
-              </View>
-            </View>
+            {suggestions.map((outfit, index) => {
+              const picked = pickedId === outfit.id;
+              return (
+                <Pressable
+                  key={outfit.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Choose ${outfit.label}`}
+                  accessibilityState={{ selected: picked }}
+                  onPress={() => { feedback(); setPickedId(outfit.id); }}
+                  style={[styles.optionCard, { backgroundColor: colors.surface, borderColor: picked ? colors.label : colors.border }]}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm }}>
+                    <Text style={{ ...typography.callout, ...typography.numeric, color: colors.label }}>Option {index + 1} · {outfit.label}</Text>
+                    <WardrobeIcon name={picked ? "checkmark.circle.fill" : "circle"} color={picked ? colors.label : colors.tertiaryLabel} size={20} />
+                  </View>
+                  <View style={{ flexDirection: "row", gap: spacing.xs }}>
+                    {suggestionItems(outfit).slice(0, 5).map(item => <ItemImage key={item.id} imageUrl={item.displayAssetUri} label={item.name} contentFit="contain" style={{ width: 52, height: 64, aspectRatio: undefined, borderWidth: 0, borderRadius: radius.sm }} />)}
+                  </View>
+                  <Text style={{ ...typography.body, fontWeight: "400", color: colors.secondaryLabel }}>{outfit.description}</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
+                    {(outfit.tags ?? []).slice(0, 3).map(tag => <View key={tag} style={{ backgroundColor: colors.surfaceMuted, paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.pill }}><Text style={{ ...typography.caption, color: colors.label }}>{tag}</Text></View>)}
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
         ) : null}
 
@@ -276,7 +312,7 @@ export default function BuilderScreen() {
                 {chosen.length ? `${chosen.length} ${chosen.length === 1 ? "piece" : "pieces"} selected` : "Start with a piece"}
               </Text>
               <Text style={{ ...typography.caption, fontWeight: "400", color: colors.secondaryLabel }}>
-                {phase === "preview" ? "Keep this combination" : "See it on an avatar"}
+                {phase === "preview" ? "Keep this combination" : "See outfit ideas"}
               </Text>
             </View>
             <Button onPress={phase === "preview" ? save : generate} disabled={!chosen.length} style={[styles.primaryButton, stacked ? undefined : { minWidth: 148 }]}>
@@ -303,6 +339,7 @@ const styles = StyleSheet.create({
   generation: { flexGrow: 1, minHeight: 320, alignItems: "center", justifyContent: "center", paddingVertical: spacing.xl, gap: spacing.lg },
   generationPieces: { flexDirection: "row", gap: spacing.xs, marginBottom: spacing.md },
   previewCaption: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  optionCard: { gap: spacing.sm, padding: spacing.md, borderRadius: radius.lg, borderCurve: "continuous", borderWidth: 1, overflow: "hidden" },
   textButton: { minHeight: 44, minWidth: 44, justifyContent: "center", alignItems: "center", paddingHorizontal: 4 },
   footer: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
   footerContent: { width: "100%", maxWidth: 600, alignSelf: "center", gap: spacing.sm },
