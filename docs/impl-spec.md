@@ -31,7 +31,7 @@ PR lands a model or service change without the screens that present it (see UI p
 
 ## Behavior contracts
 - Closet/home/outfits/plan/style/look-detail render as before.
-- **Item detail** surfaces the new model: Piece details (price, category · subcategory, color + accents, brand), Fabric & fit (role, fit, sleeve, pattern, texture, warmth, formality), Status (availability, lifecycle, processing), and Wear history. Rows whose value is genuinely N/A (e.g. sleeve length on shoes) show `N/A`; unknown price shows `—`.
+- **Item detail** surfaces the new model: Piece details (price, category · subcategory, color + accents, brand), Fabric & fit (role, fit, sleeve, pattern, texture, warmth, formality), Status (availability, lifecycle, processing), and Wear history. Rows with no value (e.g. sleeve length on shoes) are omitted; Status renders only when noteworthy (non-default availability/lifecycle/processing); unknown price shows `—`.
 - Scan and manual add construct full `Item`s:
   - `originalAssetUri` = camera/library photo, `displayAssetUri` = staged version (or original when staging was skipped).
   - Blank price ⇒ `priceMinor: null` (unknown, shown as `—`); a valid amount is stored in cents.

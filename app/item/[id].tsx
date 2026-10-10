@@ -27,34 +27,33 @@ export default function ItemDetailScreen() {
 
   const fav = isFavorite(item.id);
   const price = priceToNumber(item);
-  const costPerWear = price != null && item.wearCount > 0 ? `$${(price / item.wearCount).toFixed(2)}` : "—";
 
   const detailRows: DetailRow[] = [
     { icon: "dollarsign.circle", label: "Price", value: formatPrice(item) },
-    { icon: "tag", label: "Category", value: `${categoryLabels[item.category]} · ${item.subcategory}` },
-    { icon: "paintpalette", label: "Color", value: [item.primaryColor, ...item.secondaryColors].join(", ") },
-    { icon: "bag", label: "Brand", value: item.brand ?? "Unknown" },
+    { icon: "tag", label: "Category", value: item.subcategory ? `${categoryLabels[item.category]} · ${item.subcategory}` : categoryLabels[item.category] },
+    { icon: "paintpalette", label: "Color", value: item.secondaryColors.length > 0 ? `${item.primaryColor}, ${item.secondaryColors.join(", ")}` : item.primaryColor },
   ];
+  if (item.brand) detailRows.push({ icon: "bag", label: "Brand", value: item.brand });
 
-  const fabricRows: DetailRow[] = [
+  const fabricRows = ([
     { icon: "square.stack.3d.up", label: "Role", value: roleLabels[item.role] },
-    { icon: "ruler", label: "Fit", value: item.fit ?? "—" },
-    { icon: "tshirt", label: "Sleeve", value: item.sleeveLength ?? "N/A" },
-    { icon: "scribble", label: "Pattern", value: item.pattern ?? "—" },
-    { icon: "paintbrush", label: "Texture", value: item.visibleTexture ?? "—" },
-    { icon: "thermometer.medium", label: "Warmth", value: item.warmthBand ? warmthLabels[item.warmthBand] : "—" },
-    { icon: "sparkles", label: "Formality", value: item.formality ?? "—" },
-  ];
+    item.fit ? { icon: "ruler", label: "Fit", value: item.fit } : null,
+    item.sleeveLength ? { icon: "tshirt", label: "Sleeve", value: item.sleeveLength } : null,
+    item.pattern ? { icon: "square.grid.3x3", label: "Pattern", value: item.pattern } : null,
+    item.visibleTexture ? { icon: "paintbrush", label: "Texture", value: item.visibleTexture } : null,
+    item.warmthBand ? { icon: "thermometer.medium", label: "Warmth", value: warmthLabels[item.warmthBand] } : null,
+    item.formality ? { icon: "sparkles", label: "Formality", value: item.formality } : null,
+  ] as Array<DetailRow | null>).filter((row): row is DetailRow => row !== null);
 
-  const statusRows: DetailRow[] = [
-    { icon: "tray.full", label: "Availability", value: availabilityLabels[item.availabilityStatus] },
-    { icon: "archivebox", label: "Lifecycle", value: lifecycleLabels[item.lifecycleStatus] },
-    { icon: "hourglass", label: "Processing", value: processingLabels[item.processingStatus] },
-  ];
+  const statusRows = ([
+    item.availabilityStatus !== "available" ? { icon: "tray.full", label: "Availability", value: availabilityLabels[item.availabilityStatus] } : null,
+    item.lifecycleStatus !== "owned" ? { icon: "archivebox", label: "Lifecycle", value: lifecycleLabels[item.lifecycleStatus] } : null,
+    item.processingStatus !== "ready" ? { icon: "hourglass", label: "Processing", value: processingLabels[item.processingStatus] } : null,
+  ] as Array<DetailRow | null>).filter((row): row is DetailRow => row !== null);
 
   const wearRows: DetailRow[] = [
     { icon: "clock", label: "Worn", value: item.wearCount > 0 ? `${item.wearCount} times` : "Never" },
-    { icon: "chart.line.downtrend.xyaxis", label: "Cost per wear", value: costPerWear },
+    { icon: "chart.line.downtrend.xyaxis", label: "Cost per wear", value: price != null && item.wearCount > 0 ? `$${(price / item.wearCount).toFixed(2)}` : "—" },
     { icon: "clock", label: "Last worn", value: item.lastWorn ?? "Never" },
   ];
 
@@ -91,7 +90,7 @@ export default function ItemDetailScreen() {
 
           <DetailSection title="Piece details" rows={detailRows} />
           <DetailSection title="Fabric & fit" rows={fabricRows} />
-          <DetailSection title="Status" rows={statusRows} />
+          {statusRows.length > 0 ? <DetailSection title="Status" rows={statusRows} /> : null}
           <DetailSection title="Wear history" rows={wearRows} />
         </View>
       </View>
@@ -105,7 +104,7 @@ function DetailSection({ title, rows }: { title: string; rows: DetailRow[] }) {
     <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
       <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>{title}</Text>
       <View style={{ borderRadius: radius.lg, backgroundColor: adaptiveColors.surface, borderWidth: 1, borderColor: adaptiveColors.border, paddingHorizontal: spacing.md }}>
-        {rows.map((row, index) => <InfoRow key={row.label} {...row} last={index === rows.length - 1} />)}
+        {rows.map((row, index) => <InfoRow key={row.label} icon={row.icon} label={row.label} value={row.value} last={index === rows.length - 1} />)}
       </View>
     </View>
   );
