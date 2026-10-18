@@ -1,25 +1,24 @@
 import { adaptiveColors, radius, Card, ModalHeader, Screen } from "@/components/ui";
 import { useCloset } from "@/state/closet-context";
-import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { SymbolView } from "expo-symbols";
 import { Pressable, Text, View } from "react-native";
 
 const daysOfWeek = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export default function CalendarScreen() {
-  const { items, myLooks, savedLookIds } = useCloset();
+  const { myLooks, savedLooks } = useCloset();
 
   const today = new Date();
   const dayOfWeek = today.getDay();
   const adjustedDay = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const weekRotation = [...savedLooks, ...myLooks];
 
   const weekOutfits = daysOfWeek.map((day, i) => {
     const offset = i - adjustedDay;
     const date = new Date(today);
     date.setDate(today.getDate() + offset);
     const isToday = offset === 0;
-    const savedIds = [...savedLookIds];
-    const hasSaved = isToday && savedIds.length > 0;
+    const hasSaved = isToday && savedLooks.length > 0;
 
     return {
       day,
@@ -27,7 +26,7 @@ export default function CalendarScreen() {
       month: date.toLocaleString("default", { month: "short" }),
       isToday,
       hasSaved,
-      outfit: generateOutfitsForToday("all", items)[i % 2],
+      outfit: weekRotation.length > 0 ? weekRotation[i % weekRotation.length] : undefined,
     };
   });
 
@@ -53,7 +52,7 @@ export default function CalendarScreen() {
             <Text style={{ fontSize: 15, fontWeight: "700", color: adaptiveColors.label }}>Today's look</Text>
             <Text style={{ fontSize: 12, color: adaptiveColors.secondaryLabel }}>Auto-generated from your closet</Text>
           </View>
-          <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{weekOutfits[adjustedDay]?.outfit.itemIds.length ?? 0} pieces</Text>
+          <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{weekOutfits[adjustedDay]?.outfit?.itemIds.length ?? 0} pieces</Text>
         </View>
       </Card>
 
@@ -65,8 +64,8 @@ export default function CalendarScreen() {
               <Text style={{ fontSize: 17, fontWeight: "700", color: adaptiveColors.label }}>{d.date}</Text>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>{d.outfit.label}</Text>
-              <Text style={{ fontSize: 12, color: adaptiveColors.secondaryLabel }}>{d.outfit.itemIds.length} pieces planned</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>{d.outfit?.label ?? "No look planned"}</Text>
+              <Text style={{ fontSize: 12, color: adaptiveColors.secondaryLabel }}>{d.outfit?.itemIds.length ?? 0} pieces planned</Text>
             </View>
             <SymbolView name="chevron.right" tintColor="rgba(0,0,0,0.25)" style={{ width: 16, height: 16 }} />
           </View>

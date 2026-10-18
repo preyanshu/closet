@@ -1,6 +1,5 @@
 import { adaptiveColors, radius, spacing, CircularGlassButton, FilterChip, ItemImage, WardrobeIcon } from "@/components/ui";
 import { mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
-import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
@@ -14,21 +13,19 @@ type Filter = (typeof filters)[number];
 type LibraryOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" | "mock" };
 
 export default function OutfitsScreen() {
-  const { items, myLooks, savedLookIds, toggleSavedLook, isSavedLook } = useCloset();
+  const { items, myLooks, savedLooks, toggleSavedLook, isSavedLook } = useCloset();
   const [filter, setFilter] = useState<Filter>("All");
   const [gridWidth, setGridWidth] = useState(0);
   const [pressedId, setPressedId] = useState<string | null>(null);
 
   const outfits = useMemo<LibraryOutfit[]>(() => {
-    const altaLooks = generateOutfitsForToday("all", items)
-      .filter((outfit) => savedLookIds.has(outfit.id))
-      .map((outfit) => ({ ...outfit, source: "saved" as const }));
+    const altaLooks = savedLooks.map((outfit) => ({ ...outfit, source: "saved" as const }));
     return [
       ...altaLooks,
       ...myLooks.map((outfit) => ({ ...outfit, source: "mine" as const })),
       ...mockOutfitAlbums.map((outfit) => ({ ...outfit, source: "mock" as const })),
     ];
-  }, [items, myLooks, savedLookIds]);
+  }, [myLooks, savedLooks]);
 
   const filteredOutfits = outfits.filter((outfit) => {
     if (filter === "All") return true;
@@ -73,7 +70,7 @@ export default function OutfitsScreen() {
               const outfitItems = outfit.itemIds.map((id) => items.find((item) => item.id === id)).filter((item): item is Item => Boolean(item));
               const favorite = isSavedLook(outfit.id);
               const key = `${outfit.source}-${outfit.id}`;
-              return <OutfitCard key={key} outfit={outfit} items={outfitItems} favorite={favorite} width={columnWidth} pressed={pressedId === key} onPressIn={() => setPressedId(key)} onPressOut={() => setPressedId(null)} onPress={() => router.push(`/look/${outfit.id}`)} onFavorite={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); toggleSavedLook(outfit.id); }} />;
+              return <OutfitCard key={key} outfit={outfit} items={outfitItems} favorite={favorite} width={columnWidth} pressed={pressedId === key} onPressIn={() => setPressedId(key)} onPressOut={() => setPressedId(null)} onPress={() => router.push(`/look/${outfit.id}`)} onFavorite={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); toggleSavedLook(outfit.id, outfit); }} />;
             })}
           </View>
         ) : <EmptyLooks filter={filter} onClear={() => setFilter("All")} onBuild={() => router.push("/builder")} />}

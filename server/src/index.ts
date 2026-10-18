@@ -17,6 +17,8 @@ type Env = {
 
 const DETECT_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const STAGE_MODEL = "@cf/black-forest-labs/flux-2-klein-4b";
+const STYLE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DECIDE_MODEL = "@cf/cloudflare/clef-flash";
 
 const DEFAULT_DETECT_PROMPT = `You are a garment attribute extractor. Given a single clothing item photo, return ONLY valid JSON (no prose, no markdown fences) with exactly these fields:
 {
@@ -102,6 +104,79 @@ app.post("/v1/stage", async (c) => {
   return c.json({ image: imageData });
 });
 
+/**
+ * Thin stateless proxy for one turn of the client-side stylist agent loop.
+ * Body: { messages, tools, max_tokens? }. The client owns the persona, the
+ * tools (executed locally against the wardrobe DB), and the loop. This worker
+ * just forwards to Workers AI with the tools schema and normalizes the reply
+ * into { tool_calls } | { text }.
+ */
+app.post("/v1/style/turn", async (c) => {
+  const creds = credentials(c.env);
+  if (!creds) return c.json({ error: "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not configured" }, 500);
+
+  const body = await c.req.json().catch(() => null);
+  const messages = Array.isArray(body?.messages) ? body.messages : null;
+  const tools = Array.isArray(body?.tools) ? body.tools : null;
+  if (!messages || messages.length === 0) return c.json({ error: "body.messages must be a non-empty array" }, 400);
+  if (!tools || tools.length === 0) return c.json({ error: "body.tools must be a non-empty array" }, 400);
+  if (messages.length > 40) return c.json({ error: `body.messages up to 40; received ${messages.length}` }, 400);
+
+  const response = await fetch(aiRunUrl(creds.accountId, STYLE_MODEL), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${creds.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messages,
+      tools,
+      max_tokens: Math.min(2000, Math.max(200, Number(body?.max_tokens ?? 1200))),
+      temperature: 0,
+    }),
+  });
+
+  const data = await readJson(response);
+  if (!response.ok || data?.success === false) return c.json({ error: describeError(data, response.status) }, 502);
+
+  const result = data?.result ?? data;
+  const toolCalls = normalizeToolCalls(result?.tool_calls);
+  if (toolCalls && toolCalls.length > 0) return c.json({ tool_calls: toolCalls });
+  return c.json({ text: extractText(result) });
+});
+
+/**
+ * Thin proxy to a decision model (Clef-flash — Jev/System One compatible).
+ * Body: { state, questions, images? }. Returns typed answers with probabilities.
+ * Used for: wardrobe-diff triage, chat prompt parsing, retry direction,
+ * coherence gates — fast typed judgments that must not burn an LLM session.
+ */
+app.post("/v1/decide", async (c) => {
+  const creds = credentials(c.env);
+  if (!creds) return c.json({ error: "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not configured" }, 500);
+
+  const body = await c.req.json().catch(() => null);
+  const state = body?.state;
+  const questions = (body?.questions ?? {}) as Record<string, SystemOneQuestion>;
+  const hasState = typeof state === "string" || Array.isArray(state) || Boolean(state && typeof state === "object");
+  if (!hasState) return c.json({ error: "body.state (string, object, or array) is required" }, 400);
+  const questionKeys = Object.keys(questions);
+  if (questionKeys.length === 0 || questionKeys.length > 64) return c.json({ error: "body.questions must have 1–64 entries" }, 400);
+  for (const key of questionKeys) {
+    const q = questions[key];
+    if (!q || !["noul", "choice", "score"].includes(q.type)) {
+      return c.json({ error: `question "${key}" must be noul | choice | score` }, 400);
+    }
+  }
+
+  const response = await fetch(aiRunUrl(creds.accountId, DECIDE_MODEL), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${creds.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ state, questions, images: Array.isArray(body?.images) ? body.images : undefined }),
+  });
+
+  const data = await readJson(response);
+  if (!response.ok || data?.success === false) return c.json({ error: describeError(data, response.status) }, 502);
+  return c.json({ answers: data?.result?.answers ?? data?.answers ?? {} });
+});
+
 app.notFound((c) => c.json({ error: "not found" }, 404));
 
 app.onError((error, c) => {
@@ -130,6 +205,38 @@ async function readJson(response: Response): Promise<any> {
 function describeError(data: any, status: number): string {
   const detail = data?.errors ? JSON.stringify(data.errors) : data?.error ?? data?.raw ?? "";
   return `Cloudflare AI request failed (${status}): ${String(detail).slice(0, 200)}`;
+}
+
+type SystemOneQuestion = {
+  type: "noul" | "choice" | "score";
+  instructions?: string;
+  criteria?: Record<string, string> | string[];
+  levels?: string[];
+};
+
+/** Normalize Workers AI / OpenAI-style tool_calls into a stable client shape. */
+function normalizeToolCalls(raw: unknown): Array<{ id: string; name: string; arguments: Record<string, unknown> }> | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const calls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const entry = raw[i] as Record<string, unknown>;
+    const fn = (entry?.function ?? entry) as Record<string, unknown>;
+    const name = typeof fn?.name === "string" ? fn.name : typeof entry?.name === "string" ? entry.name : null;
+    if (!name) continue;
+    let args: Record<string, unknown> = {};
+    const rawArgs = fn?.arguments ?? entry?.arguments;
+    if (typeof rawArgs === "string") {
+      try {
+        args = JSON.parse(rawArgs) as Record<string, unknown>;
+      } catch {
+        args = {};
+      }
+    } else if (rawArgs && typeof rawArgs === "object") {
+      args = rawArgs as Record<string, unknown>;
+    }
+    calls.push({ id: typeof entry?.id === "string" ? entry.id : `call_${i}`, name, arguments: args });
+  }
+  return calls.length > 0 ? calls : null;
 }
 
 function extractText(result: unknown): string {

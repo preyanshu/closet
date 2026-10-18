@@ -53,3 +53,81 @@ export async function requestStaging(form: FormData): Promise<string> {
   if (typeof data.image !== "string" || !data.image) throw new WardrobeApiError("Garment staging returned no image.");
   return data.image;
 }
+
+// ── Stylist agent turn (thin tool-loop proxy) ────────────────────────────────
+
+export type StyleToolCall = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+export type StyleTurnResult =
+  | { tool_calls: StyleToolCall[]; text?: undefined }
+  | { text: string; tool_calls?: undefined };
+
+/** One turn of the client-side stylist agent loop. The client owns the
+ * persona, tools (executed locally), and the loop; the worker just proxies
+ * to Workers AI with the tools schema. */
+export async function runStyleTurn(
+  messages: Array<Record<string, unknown>>,
+  tools: Array<Record<string, unknown>>,
+  maxTokens?: number,
+): Promise<StyleTurnResult> {
+  if (!isWardrobeApiConfigured()) {
+    throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
+  }
+  const response = await expoFetch(endpoint("/v1/style/turn"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages, tools, max_tokens: maxTokens ?? 1200 }),
+  });
+  const text = await response.text();
+  if (response.status !== 200) {
+    throw new WardrobeApiError(`Stylist turn failed (${response.status}): ${text.slice(0, 200)}`);
+  }
+  const data = parseJson(text);
+  if (Array.isArray(data.tool_calls) && data.tool_calls.length > 0) {
+    return { tool_calls: data.tool_calls as StyleToolCall[] };
+  }
+  if (typeof data.text === "string") return { text: data.text };
+  throw new WardrobeApiError("Stylist turn returned neither tool_calls nor text.");
+}
+
+// ── Decision model (Clef-flash / System One) ─────────────────────────────────
+
+export type SystemOneQuestion = {
+  type: "noul" | "choice" | "score";
+  instructions?: string;
+  criteria?: Record<string, string> | string[];
+  levels?: string[];
+};
+
+export type SystemOneAnswers = Record<
+  string,
+  | { type: "noul"; noul: number }
+  | { type: "choice"; choice: string; confidence: number; probabilities: Record<string, number> }
+  | { type: "score"; score: number; distribution?: Record<string, number>; confidence?: number }
+>;
+
+/** Typed decision call (triage, prompt parsing, coherence gates, vision extraction). */
+export async function runDecision(
+  state: string | Record<string, unknown> | Array<unknown>,
+  questions: Record<string, SystemOneQuestion>,
+  images?: string[],
+): Promise<SystemOneAnswers> {
+  if (!isWardrobeApiConfigured()) {
+    throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
+  }
+  const response = await expoFetch(endpoint("/v1/decide"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state, questions, images: images && images.length > 0 ? images : undefined }),
+  });
+  const text = await response.text();
+  if (response.status !== 200) {
+    throw new WardrobeApiError(`Decision failed (${response.status}): ${text.slice(0, 200)}`);
+  }
+  const data = parseJson(text);
+  return (data.answers ?? {}) as SystemOneAnswers;
+}

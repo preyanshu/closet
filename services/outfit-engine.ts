@@ -1,4 +1,6 @@
 import { clothingItems, type Item, type Outfit } from "@/data/mock";
+import { WardrobeApiError } from "@/services/api/wardrobe-api";
+import { runStylistAgent, type RawStyleOutfit, type StylistWardrobe } from "@/services/stylist-agent";
 import type { ItemRole, OutfitItemRef } from "@/types/domain";
 
 /**
@@ -508,4 +510,142 @@ export function generateOutfitsForToday(aestheticId = "all", sourceItems: Item[]
   const filtered = styleTags.length > 0 ? sourceItems.filter((item) => item.styleTags.some((tag) => styleTags.includes(tag))) : sourceItems;
   const pool = filtered.length >= 6 ? filtered : sourceItems;
   return composeOutfits({ occasion: "everyday", styleTags, count: 2 }, pool);
+}
+
+// ---------------------------------------------------------------------------
+// LLM-native generation via the client-side stylist agent (MCP-style tool
+// loop). The LLM explores the wardrobe through tools, composes raw outfits,
+// and we validate/repair with the deterministic rules before presenting.
+// ---------------------------------------------------------------------------
+
+function aiToOutfit(items: Item[], style: RawStyleOutfit, context: OutfitContext, index: number): Outfit {
+  const now = new Date().toISOString();
+  const refs: OutfitItemRef[] = items.map((item) => ({ itemId: item.id, role: item.role, layerOrder: ROLE_ORDER[item.role] }));
+  const id = `ai-${index + 1}-${hashKey(`${context.occasion ?? "everyday"}|${items.map((item) => item.id).sort().join(",")}`)}`;
+  return {
+    id,
+    ownerId: "local-demo",
+    label: style.label || "Styled look",
+    source: "recommended",
+    description: style.reason || describeOutfit(items, context, "fresh"),
+    itemIds: items.map((item) => item.id),
+    items: refs,
+    aestheticId: context.styleTags?.[0] ?? "all",
+    tags: outfitTags(items, context),
+    metadata: {
+      occasion: OCCASION_LABEL[context.occasion ?? "everyday"],
+      season: context.season ? context.season : undefined,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/** Validate + repair agent output: cap pieces, drop conflicts, fill footwear. */
+export function verifyAndRepairOutfits(raw: RawStyleOutfit[], wardrobe: Item[], context: OutfitContext): Outfit[] {
+  const byId = new Map(wardrobe.map((item) => [item.id, item]));
+  const result: Outfit[] = [];
+  const seen = new Set<string>();
+  const max = context.count ?? 3;
+
+  for (const style of raw) {
+    const seenIds = new Set<string>();
+    const pieces = style.items
+      .map((id) => byId.get(id))
+      .filter((item): item is Item => Boolean(item))
+      .filter((item) => {
+        if (seenIds.has(item.id)) return false;
+        seenIds.add(item.id);
+        return true;
+      });
+
+    const onePiece = pieces.find((item) => item.role === "one_piece");
+    const clean = onePiece
+      ? pieces.filter((item) => item.role !== "base_top" && item.role !== "bottom")
+      : pieces;
+
+    const hasCore = clean.some((item) => item.role === "one_piece")
+      || (clean.some((item) => item.role === "base_top") && clean.some((item) => item.role === "bottom"));
+    if (!hasCore || clean.length === 0) continue;
+
+    if (!clean.some((item) => item.role === "footwear")) {
+      const shoe = pickBest(byRole(wardrobe, "footwear"), context);
+      if (shoe && !clean.some((item) => item.id === shoe.id)) clean.push(shoe);
+    }
+
+    clean.sort((a, b) => ROLE_ORDER[a.role] - ROLE_ORDER[b.role] || a.id.localeCompare(b.id));
+    const finalPieces = clean.slice(0, 6);
+    const signature = finalPieces.map((item) => item.id).join(",");
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+
+    result.push(aiToOutfit(finalPieces, style, context, result.length));
+    if (result.length >= max) break;
+  }
+
+  return result;
+}
+
+export type ComposeAIResult = {
+  outfits: Outfit[];
+  reply?: string;
+  turnsUsed?: number;
+};
+
+export type ComposeAIOptions = {
+  /** Ids the user has hearted; biases the agent toward proven taste. */
+  favoriteIds?: string[];
+  /** Saved/manual outfits — the taste memory the agent riffs on. */
+  savedLooks?: Outfit[];
+  /** Free-text user request (chat lane / "dinner tonight"). */
+  userRequest?: string;
+  /** Override the system prompt (chat lane uses CHAT_SYSTEM). */
+  system?: string;
+  /** Prior messages for chat continuation. */
+  history?: Array<{ role: string; content: string }>;
+};
+
+/**
+ * Agent-native composition. Runs the client-side tool loop against the
+ * wardrobe, validates/repairs with the deterministic rules, and tops up with
+ * the rules engine only when the agent returns fewer than requested.
+ */
+export async function composeOutfitsAI(
+  context: OutfitContext = {},
+  items: Item[] = clothingItems,
+  options: ComposeAIOptions = {},
+): Promise<ComposeAIResult> {
+  const pool = items.filter(isEligible);
+  if (pool.length < 6) throw new WardrobeApiError("Not enough wearable pieces to style a look.");
+
+  const count = Math.max(2, context.count ?? 3);
+  const wardrobe: StylistWardrobe = {
+    items,
+    favoriteIds: new Set(options.favoriteIds ?? []),
+    savedLooks: options.savedLooks ?? [],
+  };
+
+  const result = await runStylistAgent(
+    {
+      occasion: context.occasion,
+      season: context.season,
+      styleTags: context.styleTags,
+      count,
+      userRequest: options.userRequest,
+    },
+    wardrobe,
+    { system: options.system, history: options.history },
+  );
+
+  const verified = verifyAndRepairOutfits(result.outfits, pool, context);
+  if (verified.length === 0) throw new WardrobeApiError("The stylist returned no valid combos — try again.");
+
+  if (verified.length < count) {
+    for (const filler of composeOutfits({ ...context, count }, pool)) {
+      if (verified.length >= count) break;
+      if (!verified.some((entry) => entry.itemIds.join(",") === filler.itemIds.join(","))) verified.push(filler);
+    }
+  }
+
+  return { outfits: verified.slice(0, count), reply: result.reply, turnsUsed: result.turnsUsed };
 }

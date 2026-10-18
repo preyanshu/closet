@@ -56,6 +56,8 @@ export type AiAttribute = {
   modelVersion?: string;
   schemaVersion: number;
   reviewStatus: AiReviewStatus;
+  /** Model confidence in [0, 1]; low values surface as tap-to-confirm chips. */
+  confidence?: number;
   generatedAt?: string;
   updatedAt?: string;
 };

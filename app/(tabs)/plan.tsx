@@ -1,6 +1,5 @@
 import { adaptiveColors, radius, GlassButton, Screen, SectionHeader, Sheet, WardrobeIcon } from "@/components/ui";
 import { clothingItems, mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
-import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
 import { Image } from "expo-image";
 import { router } from "expo-router";
@@ -13,24 +12,28 @@ const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export default function PlanScreen() {
-  const { items, myLooks, savedLookIds } = useCloset();
+  const { items, myLooks, savedLooks, logWear } = useCloset();
   const today = new Date();
   const [visibleDate, setVisibleDate] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDay, setSelectedDay] = useState(today.getDate());
   const [pickerDay, setPickerDay] = useState<number | null>(null);
   const [plannedLooks, setPlannedLooks] = useState<Record<string, string>>({});
+  const [wornDays, setWornDays] = useState<Set<string>>(() => new Set());
   const { width } = useWindowDimensions();
 
   const monthCells = useMemo(() => getMonthCells(visibleDate), [visibleDate]);
-  const outfitOptions = useMemo<Outfit[]>(() => {
-    const savedLooks = generateOutfitsForToday("all", items).filter((outfit) => savedLookIds.has(outfit.id));
-    return [...myLooks, ...savedLooks, ...mockOutfitAlbums];
-  }, [items, myLooks, savedLookIds]);
+  const outfitOptions = useMemo<Outfit[]>(() => [...myLooks, ...savedLooks, ...mockOutfitAlbums], [myLooks, savedLooks]);
   const selectedMonth = visibleDate.getMonth() === today.getMonth() && visibleDate.getFullYear() === today.getFullYear();
   const monthLabel = `${monthNames[visibleDate.getMonth()]} ${visibleDate.getFullYear()}`;
   const cellWidth = (width - 64) / calendarColumns;
   const cellHeight = Math.max(96, Math.min(118, cellWidth * 1.2));
   const pickerDateLabel = pickerDay ? `${monthNames[visibleDate.getMonth()]} ${pickerDay}` : "";
+
+  const selectedPlanKey = getDateKey(visibleDate, selectedDay);
+  const selectedPlanOutfit = outfitOptions.find((outfit) => outfit.id === plannedLooks[selectedPlanKey]) ?? null;
+  const selectedDateObj = new Date(visibleDate.getFullYear(), visibleDate.getMonth(), selectedDay);
+  const isPastDay = selectedDateObj < new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const isSelectedWorn = wornDays.has(selectedPlanKey);
 
   const moveMonth = (direction: -1 | 1) => {
     setVisibleDate((current) => {
@@ -156,6 +159,45 @@ export default function PlanScreen() {
             </View>
           </View>
         </View>
+
+        {selectedPlanOutfit && (
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              backgroundColor: adaptiveColors.surface,
+              borderRadius: 20,
+              borderWidth: 1,
+              borderColor: adaptiveColors.border,
+              paddingHorizontal: 16,
+              paddingVertical: 14,
+            }}
+          >
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text numberOfLines={1} style={{ fontSize: 14, fontWeight: "800", color: adaptiveColors.label }}>
+                {selectedPlanOutfit.label}
+              </Text>
+              <Text style={{ fontSize: 11, fontWeight: "700", color: adaptiveColors.secondaryLabel }}>
+                {monthNames[visibleDate.getMonth()]} {selectedDay} · {selectedPlanOutfit.itemIds.length} pieces
+              </Text>
+            </View>
+            <GlassButton
+              icon={isSelectedWorn ? "checkmark.circle.fill" : "checkmark.circle"}
+              label={isSelectedWorn ? "Worn" : "I wore this"}
+              tintColor={isSelectedWorn ? "#34C759" : "rgba(0,0,0,0.6)"}
+              onPress={() => {
+                if (isSelectedWorn || !isPastDay) return;
+                const date = new Date(visibleDate.getFullYear(), visibleDate.getMonth(), selectedDay);
+                const localDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+                logWear(selectedPlanOutfit.id, selectedPlanOutfit.itemIds, localDate);
+                setWornDays((current) => new Set(current).add(selectedPlanKey));
+              }}
+              variant={isPastDay && !isSelectedWorn ? "dark" : undefined}
+            />
+          </View>
+        )}
 
       </ScrollView>
 

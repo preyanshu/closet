@@ -1,6 +1,5 @@
 import { adaptiveColors, radius, Card, GlassButton, ModalHeader, NativePicker, Screen } from "@/components/ui";
 import { useCloset } from "@/state/closet-context";
-import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { SymbolView } from "expo-symbols";
 import { Pressable, Text, View } from "react-native";
 import { useState } from "react";
@@ -8,15 +7,11 @@ import { useState } from "react";
 type Tab = "alta" | "mine";
 
 export default function SavedLooksScreen() {
-  const { items, myLooks, savedLookIds, toggleSavedLook, isSavedLook } = useCloset();
+  const { myLooks, savedLooks, toggleSavedLook, isSavedLook } = useCloset();
   const [tab, setTab] = useState<Tab>("alta");
 
-  const allOutfits = [...generateOutfitsForToday("all", items), ...myLooks];
-  const savedOutfits = allOutfits.filter((o) => savedLookIds.has(o.id));
-
-  const displayList = tab === "alta"
-    ? savedOutfits.filter((o) => o.aestheticId !== "custom")
-    : myLooks;
+  const savedOutfits = savedLooks;
+  const displayList = tab === "alta" ? savedOutfits : myLooks;
 
   return (
     <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
@@ -43,7 +38,7 @@ export default function SavedLooksScreen() {
                     <Text style={{ fontSize: 12, color: adaptiveColors.secondaryLabel }}>{outfit.itemIds.length} pieces · {outfit.description}</Text>
                   </View>
                   {tab === "alta" && (
-                    <GlassButton icon={saved ? "heart.fill" : "heart"} label={saved ? "Remove saved look" : "Save look"} tintColor={saved ? "#FF3B30" : adaptiveColors.secondaryLabel} onPress={() => toggleSavedLook(outfit.id)} size={36} />
+                    <GlassButton icon={saved ? "heart.fill" : "heart"} label={saved ? "Remove saved look" : "Save look"} tintColor={saved ? "#FF3B30" : adaptiveColors.secondaryLabel} onPress={() => toggleSavedLook(outfit.id, outfit)} size={36} />
                   )}
                 </View>
                 {outfit.aestheticId === "custom" && (

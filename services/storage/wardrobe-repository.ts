@@ -28,6 +28,7 @@ export const PREFERENCE_KEYS = {
   savedLooks: "saved_look_ids",
   favorites: "favorite_item_ids",
   style: "style_preferences",
+  dailyLooks: "daily_looks_v1",
 } as const;
 
 const DEFAULT_SAVED_LOOK_IDS = ["mock-album-office-01", "mock-album-casual-01"];
@@ -241,10 +242,23 @@ export async function deleteOutfit(outfitId: string): Promise<void> {
   await db.runAsync("DELETE FROM outfits WHERE id = ?", outfitId);
 }
 
+export async function deleteItem(itemId: string): Promise<void> {
+  const db = await getDatabase();
+  if (!db) return;
+  await db.runAsync("DELETE FROM items WHERE id = ?", itemId);
+}
+
 export async function writePreference(key: string, value: string): Promise<void> {
   const db = await getDatabase();
   if (!db) return;
   await db.runAsync("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", key, value);
+}
+
+/** Read a preference value (`null` when absent / no driver). */
+export async function readPreferenceValue(key: string): Promise<string | null> {
+  const db = await getDatabase();
+  if (!db) return null;
+  return readPreference(db, key);
 }
 
 export async function recordWearEvent(event: WearEvent): Promise<void> {

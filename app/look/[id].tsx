@@ -1,6 +1,5 @@
 import { adaptiveColors, radius, Card, ModalHeader } from "@/components/ui";
 import { categoryLabels, mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
-import { generateOutfitsForToday } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
 import { roleLabels } from "@/types/taxonomy";
 import type { ItemRole } from "@/types/domain";
@@ -15,14 +14,12 @@ type LookItemRef = { itemId: string; role?: ItemRole; layerOrder?: number };
 
 export default function LookDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { items, myLooks, savedLookIds } = useCloset();
+  const { items, myLooks, savedLooks } = useCloset();
 
-  const generatedLooks: DetailOutfit[] = generateOutfitsForToday("all", items)
-    .filter((outfit) => savedLookIds.has(outfit.id))
-    .map((outfit) => ({ ...outfit, source: "saved" }));
+  const savedLooksOut: DetailOutfit[] = savedLooks.map((outfit) => ({ ...outfit, source: "saved" }));
   const customLooks: DetailOutfit[] = myLooks.map((outfit) => ({ ...outfit, source: "mine" }));
   const demoLooks: DetailOutfit[] = mockOutfitAlbums.map((outfit) => ({ ...outfit, source: "mock" }));
-  const outfit = [...generatedLooks, ...customLooks, ...demoLooks].find((look) => look.id === id);
+  const outfit = [...savedLooksOut, ...customLooks, ...demoLooks].find((look) => look.id === id);
   const outfitItems = resolveOutfitItems(outfit, items);
 
   if (!outfit) {

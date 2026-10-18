@@ -1,20 +1,15 @@
 import { adaptiveColors, Card, GlassButton, GlassLayer, ItemImage, NativePicker, Screen, WardrobeIcon } from "@/components/ui";
-import { type Item, type Outfit } from "@/data/mock";
-import { generateOutfitsForToday } from "@/services/outfit-engine";
+import { type Item } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
+import { useDailyLooks } from "@/state/use-daily-looks";
 import * as Haptics from "expo-haptics";
 import { SymbolView } from "expo-symbols";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
 
 type OutfitViewMode = "look" | "items";
-
-const outfitMeta = [
-  { title: "Client presentation", occasion: "Business casual" },
-  { title: "Dinner after work", occasion: "Polished minimal" },
-];
 
 const quickAestheticIds = ["all", "minimal", "clean-girl", "old-money", "office"];
 const quickAestheticLabels = ["All", "Minimal", "Clean girl", "Old money", "Office"];
@@ -22,12 +17,19 @@ const quickAestheticLabels = ["All", "Minimal", "Clean girl", "Old money", "Offi
 export default function HomeScreen() {
   const [selectedAestheticId, setSelectedAestheticId] = useState<string>("all");
   const [viewModes, setViewModes] = useState<Record<string, OutfitViewMode>>({});
-  const { items, myLooks, isSavedLook, toggleSavedLook } = useCloset();
-  const outfits = generateOutfitsForToday(selectedAestheticId, items);
+  const [woreIds, setWoreIds] = useState<Set<string>>(() => new Set());
+  const { items, myLooks, isSavedLook, toggleSavedLook, logWear } = useCloset();
+  const { looks: outfits, status, error, refresh } = useDailyLooks({ aestheticId: selectedAestheticId, count: 3 });
 
   const setMode = (outfitId: string, mode: OutfitViewMode) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setViewModes((current) => ({ ...current, [outfitId]: mode }));
+  };
+
+  const handleWoreThis = (outfitId: string, itemIds: string[]) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    logWear(outfitId, itemIds);
+    setWoreIds((current) => new Set(current).add(outfitId));
   };
 
   return (
@@ -42,27 +44,65 @@ export default function HomeScreen() {
       <View className="gap-4">
         <View className="flex-row items-center justify-between">
           <Text className="text-xs font-bold uppercase tracking-[2px] text-black/40 dark:text-white/40">Alta looks</Text>
-          <Pressable onPress={() => router.push("/outfits")} className="flex-row items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/[0.04]">
-            <WardrobeIcon name="heart" color={adaptiveColors.secondaryLabel} size={13} />
-            <Text style={{ fontSize: 12, lineHeight: 16, fontWeight: "600", includeFontPadding: false, color: adaptiveColors.secondaryLabel }}>Saved</Text>
-          </Pressable>
+          <View className="flex-row items-center gap-2">
+            <Pressable
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                refresh();
+              }}
+              disabled={status === "loading"}
+              className="flex-row items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/[0.04] active:scale-[0.96]"
+            >
+              {status === "loading"
+                ? <ActivityIndicator size="small" color="rgba(0,0,0,0.4)" />
+                : <SymbolView name="arrow.clockwise" tintColor="rgba(0,0,0,0.45)" style={{ width: 13, height: 13 }} />}
+              <Text style={{ fontSize: 12, lineHeight: 16, fontWeight: "600", includeFontPadding: false, color: adaptiveColors.secondaryLabel }}>
+                {status === "loading" ? "Restyling" : "Refresh"}
+              </Text>
+            </Pressable>
+            <Pressable onPress={() => router.push("/outfits")} className="flex-row items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/[0.04]">
+              <WardrobeIcon name="heart" color={adaptiveColors.secondaryLabel} size={13} />
+              <Text style={{ fontSize: 12, lineHeight: 16, fontWeight: "600", includeFontPadding: false, color: adaptiveColors.secondaryLabel }}>Saved</Text>
+            </Pressable>
+          </View>
         </View>
+
+        {error && status !== "loading" && (
+          <View className="gap-2 rounded-[14px] bg-black/[0.04] px-4 py-3">
+            <Text className="text-xs font-semibold text-black/60 dark:text-white/60">{error}</Text>
+            <Pressable onPress={refresh} className="self-start rounded-full bg-black px-4 py-1.5 active:scale-[0.96]">
+              <Text className="text-[11px] font-bold text-white">Retry styling</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
 
       <View className="gap-6">
-        {outfits.map((outfit, index) => {
+        {status === "loading" && outfits.length === 0 && (
+          <Card className="items-center gap-3 rounded-[18px] py-8">
+            <ActivityIndicator size="small" color="rgba(0,0,0,0.4)" />
+            <Text className="text-xs font-semibold text-black/45 dark:text-white/45">Alta is styling your day…</Text>
+          </Card>
+        )}
+        {status === "error" && outfits.length === 0 && !error && (
+          <Card className="items-center gap-3 rounded-[18px] py-8">
+            <Text className="text-xs font-semibold text-black/45 dark:text-white/45">Nothing to style yet — add a few pieces.</Text>
+          </Card>
+        )}
+
+        {outfits.map((outfit) => {
           const outfitItems = outfit.itemIds
             .map((id) => items.find((item) => item.id === id))
             .filter((item): item is Item => Boolean(item));
           const mode = viewModes[outfit.id] ?? "look";
-          const meta = outfitMeta[index] ?? { title: outfit.label, occasion: "Curated" };
+          const wore = woreIds.has(outfit.id);
 
           return (
             <Card key={outfit.id} className="gap-4 rounded-[18px] p-4">
               <View className="flex-row items-start justify-between gap-4">
                 <View className="flex-1 gap-1">
-                  <Text className="text-[17px] font-bold tracking-[-0.3px] text-black dark:text-[#FFF9ED]">{meta.title}</Text>
-                  <Text className="text-xs font-medium text-black/45 dark:text-white/45">{meta.occasion}</Text>
+                  <Text className="text-[17px] font-bold tracking-[-0.3px] text-black dark:text-[#FFF9ED]">{outfit.label}</Text>
+                  <Text numberOfLines={2} className="text-xs font-medium text-black/45 dark:text-white/45">{outfit.description}</Text>
                 </View>
                 <SegmentedControl mode={mode} onChange={(nextMode) => setMode(outfit.id, nextMode)} />
               </View>
@@ -75,7 +115,14 @@ export default function HomeScreen() {
                   <Text className="text-xs font-semibold uppercase tracking-[1.3px] text-black/38 dark:text-white/38">{outfitItems.length} pieces</Text>
                 </View>
                 <View className="flex-row items-center gap-2">
-                  <LikeButton saved={isSavedLook(outfit.id)} onToggle={() => toggleSavedLook(outfit.id)} />
+                  <GlassButton
+                    icon={wore ? "checkmark.circle.fill" : "checkmark.circle"}
+                    label={wore ? "Worn today" : "I wore this"}
+                    tintColor={wore ? "#34C759" : "rgba(0,0,0,0.6)"}
+                    onPress={() => !wore && handleWoreThis(outfit.id, outfit.itemIds)}
+                    size={40}
+                  />
+                  <LikeButton saved={isSavedLook(outfit.id)} onToggle={() => toggleSavedLook(outfit.id, outfit)} />
                   <IconButton name="arrow.up" label="Share outfit" />
                 </View>
               </View>

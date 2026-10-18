@@ -1,7 +1,7 @@
 import { aesthetics, categoryLabels, type ClothingCategory } from "@/data/mock";
 import { defaultRoleForCategory } from "@/types/taxonomy";
 import { adaptiveColors, radius, Button, GlassPillButton, ModalHeader, WardrobeIcon } from "@/components/ui";
-import { detectGarment, suggestAesthetics } from "@/services/garment-detect";
+import { AUTO_CONFIRM_THRESHOLD, detectGarment, suggestAesthetics, toAiAttributes, type GarmentAttributes } from "@/services/garment-detect";
 import { stageGarment } from "@/services/garment-staging";
 import { useCloset } from "@/state/closet-context";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -54,6 +54,21 @@ type PendingItem = {
   price: number | null;
   aesthetics: string[];
   error: string | null;
+  /** Bounded-attribute extraction (Clef-flash) with per-field confidence. */
+  attrs: GarmentAttributes | null;
+  /** Fields the user confirmed via chips (or implicitly by editing). */
+  confirmedFields: string[];
+};
+
+const DETAIL_FIELD_LABELS: Record<string, string> = {
+  fit: "Fit",
+  sleeve_length: "Sleeve",
+  pattern: "Pattern",
+  texture: "Texture",
+  formality: "Formality",
+  warmth: "Warmth",
+  category: "Category",
+  primary_color: "Color",
 };
 
 const categoryShortLabels: Record<ClothingCategory, string> = {
@@ -149,6 +164,10 @@ export default function ScanModal() {
         color: detected.primary_color,
         price: null,
         aesthetics: suggestAesthetics(detected),
+        attrs: detected,
+        confirmedFields: Object.entries(detected.confidences)
+          .filter(([, confidence]) => confidence >= AUTO_CONFIRM_THRESHOLD)
+          .map(([field]) => field),
         progress: 100,
         error: null,
       }));
@@ -178,6 +197,8 @@ export default function ScanModal() {
       price: null,
       aesthetics: [],
       error: null,
+      attrs: null,
+      confirmedFields: [],
     };
     setPendingItems((prev) => [...prev, item]);
     setIncludedIds((prev) => {
@@ -260,6 +281,24 @@ export default function ScanModal() {
     const savedIds = new Set(itemsToSave.map((i) => i.id));
     const now = new Date().toISOString();
     itemsToSave.forEach((item) => {
+      const attrs = item.attrs;
+      const categoryEdited = Boolean(attrs) && item.category !== attrs!.category;
+      const colorEdited = Boolean(attrs) && item.color !== attrs!.primary_color;
+      const aiAttributes = attrs
+        ? toAiAttributes(attrs).map((attr) => {
+            if (attr.field === "category" && categoryEdited) {
+              return { ...attr, value: item.category, source: "user" as const, reviewStatus: "confirmed" as const, updatedAt: now };
+            }
+            if (attr.field === "primary_color" && colorEdited) {
+              return { ...attr, value: item.color, source: "user" as const, reviewStatus: "confirmed" as const, updatedAt: now };
+            }
+            if (item.confirmedFields.includes(attr.field)) {
+              return { ...attr, reviewStatus: "confirmed" as const, updatedAt: now };
+            }
+            return attr;
+          })
+        : undefined;
+
       addItem({
         id: `scan-${Date.now()}-${item.id}`,
         ownerId: "local-demo",
@@ -269,6 +308,12 @@ export default function ScanModal() {
         primaryColor: item.color.toLowerCase(),
         secondaryColors: [],
         styleTags: item.aesthetics,
+        pattern: attrs?.pattern || undefined,
+        fit: attrs?.fit || undefined,
+        sleeveLength: attrs?.sleeve_length || undefined,
+        visibleTexture: attrs?.material || undefined,
+        formality: attrs?.formality,
+        warmthBand: attrs?.warmth,
         originalAssetUri: item.originalUri,
         displayAssetUri: item.cleanUri ?? item.originalUri,
         priceMinor: item.price == null ? null : Math.round(item.price * 100),
@@ -278,6 +323,7 @@ export default function ScanModal() {
         availabilityStatus: "available",
         lifecycleStatus: "owned",
         processingStatus: item.progress >= 100 ? "ready" : "partial",
+        aiAttributes,
         createdAt: now,
         updatedAt: now,
         revision: 1,
@@ -697,14 +743,26 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
   const [customColors, setCustomColors] = useState<string[]>(colorOptions.includes(item.color) ? [] : [item.color.toUpperCase()]);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [selectedAesthetics, setSelectedAesthetics] = useState(item.aesthetics);
+  const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set(item.confirmedFields));
   const [error, setError] = useState("");
   const previewSource = resolveStagedSource(item.cleanUri) ?? { uri: item.originalUri };
+  const suggestedFields = (item.attrs?.suggestedFields ?? []).filter((field) => DETAIL_FIELD_LABELS[field]);
   const save = () => {
     const amount = price.trim() === "" ? null : Number(price.replace(",", "."));
     if (!name.trim()) { setError("Enter a name for this piece."); return; }
     if (amount != null && (!Number.isFinite(amount) || amount < 0)) { setError("Enter a valid price of zero or more."); return; }
     setError("");
-    onSave({ ...item, name: name.trim(), price: amount, category, color, aesthetics: selectedAesthetics, error: null, progress: 100 });
+    onSave({
+      ...item,
+      name: name.trim(),
+      price: amount,
+      category,
+      color,
+      aesthetics: selectedAesthetics,
+      confirmedFields: [...new Set([...confirmed, "category", "primary_color"])],
+      error: null,
+      progress: 100,
+    });
   };
 
   return (
@@ -743,6 +801,61 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
             {aestheticOptions.map((option) => <ReviewChoice key={option} label={beautify(option)} selected={selectedAesthetics.includes(option)} onPress={() => setSelectedAesthetics((prev) => prev.includes(option) ? prev.filter((id) => id !== option) : [...prev, option])} />)}
           </View>
         </ReviewField>
+        {suggestedFields.length > 0 ? (
+          <ReviewField label="Check these details">
+            <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>
+              Alta was less sure about these — tap to confirm, or edit above and save.
+            </Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {suggestedFields.map((field) => {
+                const attrs = item.attrs!;
+                const value = field === "texture" ? attrs.material
+                  : field === "primary_color" ? attrs.primary_color
+                    : String(attrs[field as keyof GarmentAttributes] ?? "");
+                if (!value) return null;
+                const isConfirmed = confirmed.has(field);
+                const confidence = Math.round((attrs.confidences[field] ?? 0) * 100);
+                return (
+                  <Pressable
+                    key={field}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isConfirmed }}
+                    accessibilityLabel={`Confirm ${DETAIL_FIELD_LABELS[field]}: ${value}`}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setConfirmed((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(field)) next.delete(field);
+                        else next.add(field);
+                        return next;
+                      });
+                    }}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 6,
+                      minHeight: 44,
+                      paddingVertical: 10,
+                      paddingHorizontal: 13,
+                      borderRadius: radius.pill,
+                      borderWidth: 1,
+                      borderColor: isConfirmed ? adaptiveColors.accent : adaptiveColors.border,
+                      backgroundColor: isConfirmed ? adaptiveColors.accentSoft : adaptiveColors.surface,
+                    }}
+                  >
+                    {isConfirmed ? <WardrobeIcon name="checkmark.circle.fill" color={adaptiveColors.accent} size={15} /> : <WardrobeIcon name="questionmark.circle" color={adaptiveColors.tertiaryLabel} size={15} />}
+                    <Text style={{ fontSize: 13, fontWeight: "600", color: isConfirmed ? adaptiveColors.accent : adaptiveColors.secondaryLabel }}>
+                      {DETAIL_FIELD_LABELS[field]}: {beautify(value)}
+                    </Text>
+                    <Text style={{ fontSize: 11, fontWeight: "700", color: isConfirmed ? adaptiveColors.accent : adaptiveColors.tertiaryLabel, fontVariant: ["tabular-nums"] }}>
+                      {confidence}%
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </ReviewField>
+        ) : null}
       </ScrollView>
       <View style={{ flexShrink: 0, padding: 20, gap: 12, borderTopWidth: 1, borderTopColor: adaptiveColors.separator, backgroundColor: adaptiveColors.canvas }}>
         {error ? <Text accessibilityLiveRegion="polite" style={{ color: adaptiveColors.destructive, fontSize: 13 }}>{error}</Text> : null}

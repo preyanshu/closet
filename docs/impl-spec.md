@@ -174,5 +174,107 @@ render blank rows for the demo wardrobe.
 ### Deferred, not dropped (updated)
 - D1/R2 bindings + worker auth → later.
 - AI reranker over the rule engine + occasion/season/weather chips in the builder → later.
-- Wear-event capture wiring → PR6.
 - Avatar rendering → deferred (composition-first).
+
+## PR6 — LLM-native styling: client-side agent + decision layer
+
+The old one-shot `POST /v1/style` (Scope → Compose → Verify with a scoped catalog) was
+**deleted**. Styling is now two primitives: a **client-side tool-using agent** (the phone is
+the tool host — the closet is never bulk-uploaded) and a **Clef-flash decision layer** for
+cheap typed judgments.
+
+### Agent core (`services/stylist-agent.ts`)
+- Model: `@cf/meta/llama-3.3-70b-instruct-fp8-fast` (native function calling, 24k ctx),
+  temperature 0, ≤ `MAX_AGENT_TURNS = 8` turns per session.
+- **5 tools, executed locally** against the wardrobe (deterministic sort: role order →
+  wear_count desc → id):
+  - `get_wardrobe_overview` — counts by role, palette/tag histograms, favorites, most-worn,
+    never-worn, availability summary (orient-first).
+  - `search_items` — paginated filter (role/category/colors/style_tags/formality/warmth/
+    query/favorites_only/include_unavailable; page_size ≤ 40), medium index lines.
+  - `get_items(ids[])` — full-fat detail lines, max 25 (fit, texture, brand, price, cost/wear,
+    last worn, availability, favorite).
+  - `get_saved_looks(limit≤5)` — taste memory; "do not re-propose these exactly".
+  - `get_item(id)` — single full-fat line.
+- `STYLIST_SYSTEM` hard rules: only real ids; exactly one `one_piece` OR one `base_top` +
+  `one`bottom`; footwear mandatory; 3–6 items; occasion/season coherence. Final reply is
+  **only** JSON: `{"reply", "outfits":[{"items","label","reason"}]}` — one contract for both
+  lanes (daily lane ignores `reply`, chat renders it as a bubble).
+- `CHAT_SYSTEM` extends it: conversational `reply` (<2 sentences), visibly-different retries
+  after rejects.
+
+### Server (`server/src/index.ts`)
+- `POST /v1/style/turn` — thin proxy `{ messages, tools, max_tokens? }` → `{ tool_calls }`
+  (`normalizeToolCalls`, handles function-wrapped/flat shapes) or `{ text }`.
+- `POST /v1/decide` — thin proxy `{ state, questions, images? }` → `{ answers }` to
+  `DECIDE_MODEL = "@cf/cloudflare/clef-flash"` (Jev/System One compatible; ~$0.038/M input,
+  no output billing, ~38ms median). Questions are typed: `noul | choice | score`.
+- `STYLE_SYSTEM`/`buildStylePrompt`/`StyleItem`/`parseJsonPayload` removed.
+
+### Decision layer (`services/decision.ts`)
+Typed Clef helpers (each one small `/v1/decide` call; caller handles fallback):
+`triageWardrobeDiff` (restyle noul + impact choice), `parseStylingPrompt`
+(occasion/formality/warmth/style_vibe/is_styling), `decideRetryDirection`,
+`shouldAskToNarrowDown`, `checkCoherence` (palette score + cohesion), `salvageCandidates`.
+Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
+
+### Composition (`services/outfit-engine.ts`)
+- `scopeItems`/`SCOPE_CAPS`/`toStyleContext`/`toStyleCatalog`/`composeOutfitsWithLLM`
+  deleted. New `composeOutfitsAI(context, items, options)` runs the agent, validates with
+  `verifyAndRepairOutfits` (rules), and tops up with the deterministic engine when the agent
+  returns fewer than `count`. Returns `{ outfits, reply, turnsUsed }`.
+- `composeOutfits` / `generateOutfitsForToday` stay: builder lane + failure fallback (two
+  lanes: builder = instant rules, agent = "don't make me think").
+
+### Daily looks + triggers (`state/use-daily-looks.ts`)
+- Cache key `daily_looks_v1:{date}:{aestheticId}:{count}` + djb2 wardrobe hash (id:revision);
+  all tabs read one batch; cache hit = 0 LLM calls.
+- **Wardrobe-change triage**: hash change → 45s debounce (batch rapid scans) → hard rules
+  (deleted/edited styling-relevant field while referenced by cached looks, or ≥3 additions →
+  regenerate) → else Clef `triageWardrobeDiff` (≥0.7 regenerate; KEEP extends the cache to
+  the new hash). Explicit ↻ (`refresh()`) always busts.
+- Fallback: AI failure → keep cached looks, else `generateOutfitsForToday` + retry banner.
+- Styling-relevant fields: role/category/subcategory/colors/pattern/fit/sleeve/texture/
+  formality/warmth/styleTags/statuses — name/brand/price/photo edits are cosmetic.
+
+### Chat lane (`app/chat.tsx`)
+- Typed `ChatMessage` (user/alta text + `outfits?` + error/narrow kinds); per-message agent
+  sessions seeded with conversation history (ephemeral; saving persists via `savedLooks`).
+- **Trivial-chat gate**: `parseStylingPrompt` → `is_styling` noul; chit-chat gets a canned
+  reply (0 styling sessions). Gate failure → treat as styling.
+- Offer → react → refine: cards show Save (♡ persists full outfit) / Not this (accumulates
+  rejects) / message-level ↻ Try again → `decideRetryDirection` seeds a visibly-different
+  retry; `shouldAskToNarrowDown` after repeated retries → ask instead of burning sessions;
+  failure → "Styling hiccup" + inline Retry. Typing indicator + haptics throughout.
+- **No "wore this" in chat** — chat offers, it never commits.
+
+### B signals (option B: real signals)
+- `logWear(outfitId, itemIds, localDate?)` on context → `recordWearEvent` + item
+  wearCount/lastWorn bump (persisted). Callers: **Home Today deck** and **Plan past days**
+  (placement rule: *propose anywhere, commit where the day lives* — never in chat).
+- Availability quick-actions on item detail (`available/laundry/packed/unavailable` →
+  `updateItem`); unavailable pieces are already excluded by `isEligible`. `removeItem` added
+  (feeds triage).
+
+### Saved-look unification
+- `savedLooks: Outfit[]` on context (hydrated from outfits with `source: "recommended"`);
+  `toggleSavedLook(outfitId, outfit?)` persists the full outfit on save (so surviving new
+  daily batches). outfits/calendar/saved-looks/look-detail/plan read context `savedLooks` —
+  no more regenerating outfits to find "saved" ones.
+
+## PR7 — Detect rework (Clef-flash bounded extraction)
+
+- `services/garment-detect.ts`: the free-form vision-JSON prompt
+  (`llama-3.2-11b-vision-instruct` + `JSON.parse`) is replaced by **8 typed questions** on
+  `runDecision(..., images=[dataUri])` → `/v1/decide` (Clef-flash multimodal): `category`,
+  `primary_color`, `fit`, `sleeve_length`, `pattern`, `texture` (choices from bounded sets),
+  `formality`, `warmth` (scores 1–5 banded to casual/smart-casual/formal and
+  light/medium/heavy).
+- Every answer carries `confidence` + `probabilities`. `AUTO_CONFIRM_THRESHOLD = 0.85` →
+  `AiAttribute.reviewStatus: "confirmed"`; below → `"suggested"` (tap-to-confirm chips in the
+  scan ReviewSheet with confidence %). User edits flip the row to `source: "user"`.
+- **Deterministic name template** (`Black relaxed jacket`) — the model never writes names.
+- `Item.aiAttributes` now actually populated (`toAiAttributes`, modelVersion `clef-flash`);
+  `AiAttribute` gained optional `confidence`. Scan persists the full-fat fields it used to
+  drop: `pattern/fit/sleeveLength/visibleTexture/formality/warmthBand`.
+- `/v1/detect` (llama vision) stays as an endpoint but the client no longer calls it.

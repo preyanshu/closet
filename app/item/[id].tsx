@@ -1,19 +1,20 @@
 import { adaptiveColors, radius, spacing, CircularGlassButton, ItemImage, WardrobeIcon } from "@/components/ui";
 import { SymbolView } from "expo-symbols";
-import { useLocalSearchParams } from "expo-router";
-import { ScrollView, Text, View } from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { useCloset } from "@/state/closet-context";
 import { categoryLabels } from "@/data/mock";
-import { formatPrice, priceToNumber } from "@/types/domain";
-import { availabilityLabels, lifecycleLabels, processingLabels, roleLabels, warmthLabels } from "@/types/taxonomy";
+import { formatPrice, priceToNumber, type AvailabilityStatus } from "@/types/domain";
+import { availabilityLabels, AVAILABILITY_STATUSES, lifecycleLabels, processingLabels, roleLabels, warmthLabels } from "@/types/taxonomy";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Haptics from "expo-haptics";
 
 type SymbolName = React.ComponentProps<typeof SymbolView>["name"];
 type DetailRow = { icon: SymbolName; label: string; value: string };
 
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { items, isFavorite, toggleFavorite } = useCloset();
+  const { items, isFavorite, toggleFavorite, updateItem, removeItem } = useCloset();
   const insets = useSafeAreaInsets();
   const item = items.find((i) => i.id === id);
 
@@ -92,6 +93,53 @@ export default function ItemDetailScreen() {
           <DetailSection title="Fabric & fit" rows={fabricRows} />
           {statusRows.length > 0 ? <DetailSection title="Status" rows={statusRows} /> : null}
           <DetailSection title="Wear history" rows={wearRows} />
+
+          <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>Availability</Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
+              {AVAILABILITY_STATUSES.map((status: AvailabilityStatus) => {
+                const active = item.availabilityStatus === status;
+                return (
+                  <Pressable
+                    key={status}
+                    accessibilityLabel={`Set availability to ${availabilityLabels[status]}`}
+                    onPress={() => {
+                      if (active) return;
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      updateItem({ ...item, availabilityStatus: status, updatedAt: new Date().toISOString() });
+                    }}
+                    style={{
+                      paddingHorizontal: 14,
+                      paddingVertical: 10,
+                      borderRadius: radius.pill,
+                      borderWidth: 1,
+                      borderColor: active ? adaptiveColors.label : adaptiveColors.border,
+                      backgroundColor: active ? adaptiveColors.label : adaptiveColors.surface,
+                    }}
+                  >
+                    <Text style={{ fontSize: 13, fontWeight: "600", color: active ? adaptiveColors.onAccent : adaptiveColors.secondaryLabel }}>
+                      {availabilityLabels[status]}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={{ fontSize: 11, fontWeight: "500", color: adaptiveColors.tertiaryLabel }}>
+              Unavailable pieces are skipped when Alta styles outfits.
+            </Text>
+          </View>
+
+          <Pressable
+            accessibilityLabel="Remove item from closet"
+            onPress={() => {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              removeItem(item.id);
+              router.back();
+            }}
+            style={{ alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm }}
+          >
+            <Text style={{ fontSize: 13, fontWeight: "700", color: adaptiveColors.destructive }}>Remove from closet</Text>
+          </Pressable>
         </View>
       </View>
     </ScrollView>
