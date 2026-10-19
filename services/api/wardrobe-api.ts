@@ -99,16 +99,33 @@ export async function runStyleTurn(
 export type SystemOneQuestion = {
   type: "noul" | "choice" | "score";
   instructions?: string;
+  /**
+   * choice → Record<value, label>; score → ordered string[] (the scale legend,
+   * e.g. ["1", "2", "3", "4", "5"]). Real clef-flash rejects `levels` and
+   * requires `criteria` for score questions.
+   */
   criteria?: Record<string, string> | string[];
-  levels?: string[];
 };
 
 export type SystemOneAnswers = Record<
   string,
   | { type: "noul"; noul: number }
   | { type: "choice"; choice: string; confidence: number; probabilities: Record<string, number> }
-  | { type: "score"; score: number; distribution?: Record<string, number>; confidence?: number }
+  | {
+      type: "score";
+      /** 0-based index mean over `criteria` (0..n-1); use score1To5() for a 1–5 band. */
+      score: number;
+      legend?: Record<string, string>;
+      probabilities?: Record<string, number>;
+      confidence?: number;
+    }
 >;
+
+/** Convert a clef score answer (0-based index mean) to a 1–5 integer band. */
+export function score1To5(raw: number | null | undefined): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 3;
+  return Math.min(5, Math.max(1, Math.round(raw + 1)));
+}
 
 /** Typed decision call (triage, prompt parsing, coherence gates, vision extraction). */
 export async function runDecision(

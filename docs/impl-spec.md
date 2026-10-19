@@ -185,13 +185,19 @@ cheap typed judgments.
 
 ### Agent core (`services/stylist-agent.ts`)
 - Model: `@cf/meta/llama-3.3-70b-instruct-fp8-fast` (native function calling, 24k ctx),
-  temperature 0, ≤ `MAX_AGENT_TURNS = 8` turns per session.
+  temperature 0, `MAX_AGENT_TURNS = 20` (measured max **8 turns** across 6 live sessions;
+  the cap is headroom against a runaway loop).
 - **5 tools, executed locally** against the wardrobe (deterministic sort: role order →
   wear_count desc → id):
   - `get_wardrobe_overview` — counts by role, palette/tag histograms, favorites, most-worn,
     never-worn, availability summary (orient-first).
   - `search_items` — paginated filter (role/category/colors/style_tags/formality/warmth/
-    query/favorites_only/include_unavailable; page_size ≤ 40), medium index lines.
+    query/favorites_only/include_unavailable; page_size ≤ 40), medium index lines. Over-filtered
+    searches **self-relax** (drops warmth→formality→style_tags→colors→category→role, in order)
+    and return hits directly with what was dropped.
+- llama-3.3 tool-call quirk: array args often arrive JSON-stringified
+  (`colors:"[\"black\"]"`); values are revived to real arrays/objects before execution
+  (server normalize + client `runTool`).
   - `get_items(ids[])` — full-fat detail lines, max 25 (fit, texture, brand, price, cost/wear,
     last worn, availability, favorite).
   - `get_saved_looks(limit≤5)` — taste memory; "do not re-propose these exactly".
@@ -205,10 +211,15 @@ cheap typed judgments.
 
 ### Server (`server/src/index.ts`)
 - `POST /v1/style/turn` — thin proxy `{ messages, tools, max_tokens? }` → `{ tool_calls }`
-  (`normalizeToolCalls`, handles function-wrapped/flat shapes) or `{ text }`.
+  (`normalizeToolCalls`, handles function-wrapped/flat shapes) or `{ text }`. Final-turn text
+  unwraps `choices[0].message.content` / structured `response` (llama's `-json` envelope).
+  Messages cap 400 (≈199 tool turns) as a runaway backstop.
 - `POST /v1/decide` — thin proxy `{ state, questions, images? }` → `{ answers }` to
   `DECIDE_MODEL = "@cf/cloudflare/clef-flash"` (Jev/System One compatible; ~$0.038/M input,
   no output billing, ~38ms median). Questions are typed: `noul | choice | score`.
+  `score` requires `criteria` as an **ordered list** (e.g. `["1","2","3","4","5"]`); `levels`
+  is rejected. Returned `score` is a **0-based index mean** — `score1To5()` bands it to 1–5.
+  Confidence is derived from `max(probabilities)` (Clef's own `confidence` is a weak signal).
 - `STYLE_SYSTEM`/`buildStylePrompt`/`StyleItem`/`parseJsonPayload` removed.
 
 ### Decision layer (`services/decision.ts`)
@@ -240,7 +251,8 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
 ### Chat lane (`app/chat.tsx`)
 - Typed `ChatMessage` (user/alta text + `outfits?` + error/narrow kinds); per-message agent
   sessions seeded with conversation history (ephemeral; saving persists via `savedLooks`).
-- **Trivial-chat gate**: `parseStylingPrompt` → `is_styling` noul; chit-chat gets a canned
+- **Trivial-chat gate**: `parseStylingPrompt` → `is_styling` noul ≥ 0.5 (live-calibrated:
+  clear styling asks score ~0.63–0.95 in the combined call, chit-chat ~0.01); chit-chat gets a canned
   reply (0 styling sessions). Gate failure → treat as styling.
 - Offer → react → refine: cards show Save (♡ persists full outfit) / Not this (accumulates
   rejects) / message-level ↻ Try again → `decideRetryDirection` seeds a visibly-different
@@ -268,8 +280,8 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   (`llama-3.2-11b-vision-instruct` + `JSON.parse`) is replaced by **8 typed questions** on
   `runDecision(..., images=[dataUri])` → `/v1/decide` (Clef-flash multimodal): `category`,
   `primary_color`, `fit`, `sleeve_length`, `pattern`, `texture` (choices from bounded sets),
-  `formality`, `warmth` (scores 1–5 banded to casual/smart-casual/formal and
-  light/medium/heavy).
+  `formality`, `warmth` (score questions on the ordered scale `["1".."5"]`, banded to
+  casual/smart-casual/formal and light/medium/heavy).
 - Every answer carries `confidence` + `probabilities`. `AUTO_CONFIRM_THRESHOLD = 0.85` →
   `AiAttribute.reviewStatus: "confirmed"`; below → `"suggested"` (tap-to-confirm chips in the
   scan ReviewSheet with confidence %). User edits flip the row to `source: "user"`.

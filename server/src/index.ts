@@ -120,7 +120,7 @@ app.post("/v1/style/turn", async (c) => {
   const tools = Array.isArray(body?.tools) ? body.tools : null;
   if (!messages || messages.length === 0) return c.json({ error: "body.messages must be a non-empty array" }, 400);
   if (!tools || tools.length === 0) return c.json({ error: "body.tools must be a non-empty array" }, 400);
-  if (messages.length > 40) return c.json({ error: `body.messages up to 40; received ${messages.length}` }, 400);
+  if (messages.length > 400) return c.json({ error: `body.messages up to 400; received ${messages.length}` }, 400);
 
   const response = await fetch(aiRunUrl(creds.accountId, STYLE_MODEL), {
     method: "POST",
@@ -210,9 +210,31 @@ function describeError(data: any, status: number): string {
 type SystemOneQuestion = {
   type: "noul" | "choice" | "score";
   instructions?: string;
+  /** choice → Record<value, label>; score → ordered string[] (required by clef-flash). */
   criteria?: Record<string, string> | string[];
-  levels?: string[];
 };
+
+/**
+ * llama-3.3 tool-calling quirk: array/object argument values often arrive
+ * JSON-encoded as strings (e.g. colors: "[\"black\", \"white\"]"). Revive
+ * them so tools always receive real arrays/objects.
+ */
+function reviveArgValues(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+        try {
+          out[key] = JSON.parse(trimmed);
+          continue;
+        } catch {}
+      }
+    }
+    out[key] = value;
+  }
+  return out;
+}
 
 /** Normalize Workers AI / OpenAI-style tool_calls into a stable client shape. */
 function normalizeToolCalls(raw: unknown): Array<{ id: string; name: string; arguments: Record<string, unknown> }> | null {
@@ -234,7 +256,7 @@ function normalizeToolCalls(raw: unknown): Array<{ id: string; name: string; arg
     } else if (rawArgs && typeof rawArgs === "object") {
       args = rawArgs as Record<string, unknown>;
     }
-    calls.push({ id: typeof entry?.id === "string" ? entry.id : `call_${i}`, name, arguments: args });
+    calls.push({ id: typeof entry?.id === "string" ? entry.id : `call_${i}`, name, arguments: reviveArgValues(args) });
   }
   return calls.length > 0 ? calls : null;
 }
@@ -242,13 +264,21 @@ function normalizeToolCalls(raw: unknown): Array<{ id: string; name: string; arg
 function extractText(result: unknown): string {
   if (typeof result === "string") return result;
   const value = result as {
-    response?: string | { content?: Array<{ text?: string }> };
+    choices?: Array<{ message?: { content?: unknown } }>;
+    response?: unknown;
     content?: Array<{ text?: string }>;
     message?: string;
     text?: string;
   };
+  const content = value?.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content) && typeof content?.[0]?.text === "string") return content[0].text;
   if (typeof value?.response === "string") return value.response;
-  if (typeof value?.response?.content?.[0]?.text === "string") return value.response.content[0].text;
+  if (value?.response && typeof value.response === "object") {
+    const response = value.response as { content?: Array<{ text?: string }> };
+    if (typeof response?.content?.[0]?.text === "string") return response.content[0].text;
+    return JSON.stringify(value.response);
+  }
   if (typeof value?.content?.[0]?.text === "string") return value.content[0].text;
   if (typeof value?.message === "string") return value.message;
   if (typeof value?.text === "string") return value.text;

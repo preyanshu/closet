@@ -1,4 +1,4 @@
-import { runDecision, WardrobeApiError, type SystemOneAnswers } from "@/services/api/wardrobe-api";
+import { runDecision, score1To5, WardrobeApiError, type SystemOneAnswers } from "@/services/api/wardrobe-api";
 import type { Item, Outfit } from "@/data/mock";
 
 /**
@@ -19,7 +19,7 @@ function choiceOf(answers: SystemOneAnswers, key: string): { choice: string; con
 
 function scoreOf(answers: SystemOneAnswers, key: string): number | null {
   const a = answers[key];
-  return a && a.type === "score" ? a.score : null;
+  return a && a.type === "score" ? score1To5(a.score) : null;
 }
 
 export type WardrobeDiff =
@@ -99,8 +99,8 @@ export async function parseStylingPrompt(prompt: string): Promise<ParsedStylingP
       instructions: "What occasion is closest to this request?",
       criteria: Object.fromEntries(OCCASIONS.map((o) => [o, o])),
     },
-    formality: { type: "score", instructions: "How dressy should the outfit be? 1 = very casual, 5 = formal.", levels: ["1", "2", "3", "4", "5"] },
-    warmth: { type: "score", instructions: "How warm should the layers be? 1 = light/breathable, 5 = heavy/cold-weather.", levels: ["1", "2", "3", "4", "5"] },
+    formality: { type: "score", instructions: "How dressy should the outfit be? 1 = very casual, 5 = formal.", criteria: ["1", "2", "3", "4", "5"] },
+    warmth: { type: "score", instructions: "How warm should the layers be? 1 = light/breathable, 5 = heavy/cold-weather.", criteria: ["1", "2", "3", "4", "5"] },
     style_vibe: {
       type: "choice",
       instructions: "Which style aesthetic is closest?",
@@ -111,9 +111,11 @@ export async function parseStylingPrompt(prompt: string): Promise<ParsedStylingP
   return {
     occasion: choiceOf(answers, "occasion")?.choice ?? "everyday",
     formality: Math.round(scoreOf(answers, "formality") ?? 3),
-    warmth: Math.round(scoreOf(answers, "warmth") ?? 3),
-    styleVibe: choiceOf(answers, "style_vibe")?.choice ?? "minimal",
-    isStylingRequest: (noulOf(answers, "is_styling") ?? 0) >= 0.7,
+    warmth: Math.round(scoreOf(answers, "warmth") ?? 3),    styleVibe: choiceOf(answers, "style_vibe")?.choice ?? "minimal",
+    // Calibrated on live clef-flash: a clear styling ask scores ~0.63–0.95 in
+    // this combined call (0.77 when asked alone), while chit-chat sits ~0.01.
+    // 0.7 misfired on real prompts, so the gate is 0.5 — a wide margin either way.
+    isStylingRequest: (noulOf(answers, "is_styling") ?? 0) >= 0.5,
   };
 }
 
@@ -191,7 +193,7 @@ export async function checkCoherence(
       type: "noul",
       instructions: "Does this outfit read as one cohesive look for the stated occasion (not two outfits stitched together, nothing obviously missing)?",
     },
-    palette: { type: "score", instructions: "How cohesive is the color palette? 1 = clashing, 5 = excellent.", levels: ["1", "2", "3", "4", "5"] },
+    palette: { type: "score", instructions: "How cohesive is the color palette? 1 = clashing, 5 = excellent.", criteria: ["1", "2", "3", "4", "5"] },
   });
 
   const coherent = (noulOf(answers, "coherent") ?? 0) >= 0.6;

@@ -1,7 +1,7 @@
 import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import { File } from "expo-file-system";
 import type { ClothingCategory } from "@/data/mock";
-import { isWardrobeApiConfigured, runDecision, WardrobeApiError } from "@/services/api/wardrobe-api";
+import { isWardrobeApiConfigured, runDecision, score1To5, WardrobeApiError } from "@/services/api/wardrobe-api";
 import type { AiAttribute, WarmthBand } from "@/types/domain";
 
 /**
@@ -145,18 +145,30 @@ export function toAiAttributes(attrs: GarmentAttributes): AiAttribute[] {
     });
 }
 
+/**
+ * Clef's own `confidence` is a weak signal (often ~0.1 even for peaked
+ * answers); the probability mass on the chosen label is the honest one.
+ */
+function bestProbability(raw: unknown): number | null {
+  if (!raw || typeof raw !== "object") return null;
+  const values = Object.values(raw as Record<string, unknown>).filter((value): value is number => typeof value === "number");
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
 function choiceAnswer(answers: Record<string, unknown>, key: string): { choice: string; confidence: number } | null {
-  const answer = answers[key] as { type?: string; choice?: string; confidence?: number } | undefined;
+  const answer = answers[key] as { type?: string; choice?: string; confidence?: number; probabilities?: unknown } | undefined;
   if (answer?.type === "choice" && typeof answer.choice === "string") {
-    return { choice: answer.choice, confidence: typeof answer.confidence === "number" ? answer.confidence : 0 };
+    const confidence = bestProbability(answer.probabilities) ?? (typeof answer.confidence === "number" ? answer.confidence : 0);
+    return { choice: answer.choice, confidence };
   }
   return null;
 }
 
 function scoreAnswer(answers: Record<string, unknown>, key: string): { score: number; confidence: number } | null {
-  const answer = answers[key] as { type?: string; score?: number; confidence?: number } | undefined;
+  const answer = answers[key] as { type?: string; score?: number; confidence?: number; probabilities?: unknown } | undefined;
   if (answer?.type === "score" && typeof answer.score === "number") {
-    return { score: answer.score, confidence: typeof answer.confidence === "number" ? answer.confidence : 0 };
+    const confidence = bestProbability(answer.probabilities) ?? (typeof answer.confidence === "number" ? answer.confidence : 0);
+    return { score: score1To5(answer.score), confidence };
   }
   return null;
 }
@@ -205,8 +217,8 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
       sleeve_length: { type: "choice", instructions: "Sleeve/leg length as visible. If not applicable, pick the closest.", criteria: Object.fromEntries(SLEEVE_VALUES.map((v) => [v, v])) },
       pattern: { type: "choice", instructions: "What is the pattern?", criteria: Object.fromEntries(PATTERN_VALUES.map((v) => [v, v])) },
       texture: { type: "choice", instructions: "What is the visible surface texture?", criteria: Object.fromEntries(TEXTURE_VALUES.map((v) => [v, v])) },
-      formality: { type: "score", instructions: "How dressy is this piece? 1 = very casual, 5 = formal.", levels: ["1", "2", "3", "4", "5"] },
-      warmth: { type: "score", instructions: "How warm is this piece? 1 = light/breathable, 5 = heavy/cold-weather.", levels: ["1", "2", "3", "4", "5"] },
+      formality: { type: "score", instructions: "How dressy is this piece? 1 = very casual, 5 = formal.", criteria: ["1", "2", "3", "4", "5"] },
+      warmth: { type: "score", instructions: "How warm is this piece? 1 = light/breathable, 5 = heavy/cold-weather.", criteria: ["1", "2", "3", "4", "5"] },
     },
     [dataUri],
   );

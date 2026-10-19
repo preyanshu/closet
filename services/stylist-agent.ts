@@ -8,11 +8,11 @@ function isEligible(item: Item): boolean {
 /**
  * Client-side stylist agent (MCP-style). The phone is the tool host: the LLM
  * never sees the bulk closet — it requests slices via tools, and we execute
- * them locally against the wardrobe DB. Loop: ≤8 turns, temp 0, deterministic
- * sorted tool results.
+ * them locally against the wardrobe DB. Loop: ≤MAX_AGENT_TURNS (20) turns,
+ * temp 0, deterministic sorted tool results.
  */
 
-export const MAX_AGENT_TURNS = 8;
+export const MAX_AGENT_TURNS = 20;
 export const SEARCH_PAGE_DEFAULT = 20;
 export const SEARCH_PAGE_MAX = 40;
 export const GET_ITEMS_MAX = 25;
@@ -194,22 +194,61 @@ function runSearchTool(args: Record<string, unknown>, wardrobe: ToolWardrobe): s
   const query = typeof args.query === "string" ? args.query.toLowerCase() : null;
   const favoritesOnly = Boolean(args.favorites_only);
 
-  let filtered = pool.filter((item) => {
-    if (role && item.role !== role) return false;
-    if (category && item.category !== category) return false;
-    if (colors.length > 0) {
+  const active = {
+    warmth: Boolean(warmth),
+    formality: Boolean(formality),
+    style_tags: styleTags.length > 0,
+    colors: colors.length > 0,
+    category: Boolean(category),
+    role: Boolean(role),
+  };
+
+  const matches = (item: Item, flags: typeof active): boolean => {
+    if (flags.role && role && item.role !== role) return false;
+    if (flags.category && category && item.category !== category) return false;
+    if (flags.colors && colors.length > 0) {
       const itemColors = [item.primaryColor, ...item.secondaryColors].map((c) => c.toLowerCase());
       if (!colors.some((c) => itemColors.includes(c))) return false;
     }
-    if (styleTags.length > 0 && !styleTags.some((tag) => item.styleTags.includes(tag))) return false;
-    if (formality && item.formality !== formality) return false;
-    if (warmth && item.warmthBand !== warmth) return false;
+    if (flags.style_tags && styleTags.length > 0 && !styleTags.some((tag) => item.styleTags.includes(tag))) return false;
+    if (flags.formality && formality && item.formality !== formality) return false;
+    if (flags.warmth && warmth && item.warmthBand !== warmth) return false;
     if (query && !item.name.toLowerCase().includes(query)) return false;
     if (favoritesOnly && !wardrobe.favoriteIds.has(item.id)) return false;
     return true;
-  });
+  };
 
-  filtered = sortItems(filtered);
+  const sortByRole = (items: Item[]) => sortItems(items);
+
+  let filtered = sortByRole(pool.filter((item) => matches(item, active)));
+  let dropped: string[] = [];
+
+  // Over-filtered searches self-relax (deterministic priority) and return the
+  // hits directly — one wasted turn here costs a whole agent session.
+  if (filtered.length === 0 && !query && !favoritesOnly) {
+    const order: Array<[keyof typeof active, string]> = [
+      ["warmth", `warmth=${warmth}`],
+      ["formality", `formality=${formality}`],
+      ["style_tags", `style_tags=${styleTags.join("/")}`],
+      ["colors", `colors=${colors.join("/")}`],
+      ["category", `category=${category}`],
+      ["role", `role=${role}`],
+    ];
+    for (const [flag, label] of order) {
+      if (!active[flag]) continue;
+      active[flag] = false;
+      dropped.push(label);
+      filtered = sortByRole(pool.filter((item) => matches(item, active)));
+      if (filtered.length > 0) break;
+    }
+    if (filtered.length > 0) {
+      const slice = filtered.slice(0, SEARCH_PAGE_DEFAULT);
+      const lines = slice.map((item) => itemIndexLine(item, wardrobe.favoriteIds.has(item.id)));
+      return `0 results with your filters; relaxed by dropping ${dropped.join(", ")} → total: ${filtered.length}\n${lines.join("\n")}`;
+    }
+    return "0 results even after relaxing every filter. Try a different role or query.";
+  }
+
   const total = filtered.length;
   const page = Math.max(1, Math.floor(Number(args.page ?? 1)) || 1);
   const pageSize = Math.min(SEARCH_PAGE_MAX, Math.max(1, Math.floor(Number(args.page_size ?? SEARCH_PAGE_DEFAULT)) || SEARCH_PAGE_DEFAULT));
@@ -250,8 +289,30 @@ function runGetItem(args: Record<string, unknown>, wardrobe: ToolWardrobe): stri
   return item ? itemFullLine(item, wardrobe.favoriteIds.has(item.id)) : `No item with id "${id}".`;
 }
 
+/**
+ * llama-3.3 quirk: array argument values sometimes arrive JSON-encoded as
+ * strings (colors: "[\"black\"]"). Revive before executing so filters work.
+ */
+function reviveArgValues(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args ?? {})) {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+        try {
+          out[key] = JSON.parse(trimmed);
+          continue;
+        } catch {}
+      }
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
 /** Execute a tool locally against the wardrobe. Deterministic. */
-export function runTool(name: AgentToolName | string, args: Record<string, unknown>, wardrobe: ToolWardrobe): string {
+export function runTool(name: AgentToolName | string, rawArgs: Record<string, unknown>, wardrobe: ToolWardrobe): string {
+  const args = reviveArgValues(rawArgs);
   switch (name) {
     case "get_wardrobe_overview": return buildOverview(wardrobe);
     case "search_items": return runSearchTool(args, wardrobe);
