@@ -4,6 +4,7 @@ import { parseStylingPrompt, shouldAskToNarrowDown, decideRetryDirection } from 
 import { CHAT_SYSTEM } from "@/services/stylist-agent";
 import { composeOutfitsAI, type Occasion } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
+import { useWeather } from "@/state/use-weather";
 import { SymbolView } from "expo-symbols";
 import * as Haptics from "expo-haptics";
 import { useState, useRef, useEffect } from "react";
@@ -50,6 +51,7 @@ export default function ChatScreen() {
   const retryCountRef = useRef(0);
   const scrollRef = useRef<ScrollView>(null);
   const { items, favoriteIds, savedLooks, toggleSavedLook } = useCloset();
+  const { weather } = useWeather();
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: false });
@@ -105,6 +107,7 @@ export default function ChatScreen() {
           userRequest: body,
           system: CHAT_SYSTEM,
           history: history(),
+          weather: weather ?? undefined,
         },
       );
 
@@ -181,6 +184,7 @@ export default function ChatScreen() {
           userRequest: `${originalPrompt}\n${seed}`,
           system: CHAT_SYSTEM,
           history: history(),
+          weather: weather ?? undefined,
         },
       );
 

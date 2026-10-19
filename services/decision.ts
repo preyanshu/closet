@@ -1,4 +1,5 @@
-import { runDecision, score1To5, WardrobeApiError, type SystemOneAnswers } from "@/services/api/wardrobe-api";
+import { runDecision, score1To5, WardrobeApiError, type SystemOneAnswers, type SystemOneQuestion } from "@/services/api/wardrobe-api";
+import { describeWeather, type WeatherSummary } from "@/services/weather";
 import type { Item, Outfit } from "@/data/mock";
 
 /**
@@ -202,6 +203,81 @@ export async function checkCoherence(
   if (!coherent) issues.push("cohesion");
   if (paletteScore < 2.5) issues.push("palette");
   return { ok: coherent && paletteScore >= 2.5, paletteScore, issues };
+}
+
+export type OccasionFitVerdict = {
+  ok: boolean;
+  outfits: Array<{ ok: boolean; probability: number; issue: string }>;
+  summary: string;
+};
+
+const OCCASION_ISSUES: Record<string, string> = {
+  none: "Nothing — this ensemble genuinely reads as the occasion.",
+  too_casual: "Casual pieces dominate; the complete look reads more relaxed than the occasion.",
+  too_formal: "The look reads dressier/more formal than the occasion wants.",
+  incoherent: "The pieces do not look like one person's single outfit.",
+  wrong_season: "Layers are wrong for the season (too heavy for warm, too light for cold).",
+};
+
+/**
+ * Occasion-fit gate. One cheap Clef-flash call judging each COMPLETE ensemble
+ * (not individual pieces) for the stated occasion/season. Callers use this to
+ * decide whether the outfits are good enough or a re-styling pass is needed.
+ */
+export async function judgeOccasionFit(
+  context: { occasion: string; season?: string; styleTags?: string[]; weather?: WeatherSummary },
+  outfits: Array<{ label: string; item_ids: string[]; reason?: string }>,
+  wardrobe: Item[],
+): Promise<OccasionFitVerdict> {
+  const byId = new Map(wardrobe.map((item) => [item.id, item]));
+  const rendered = outfits.map((outfit) => ({
+    label: outfit.label,
+    reason: outfit.reason ?? null,
+    items: outfit.item_ids.map((id) => {
+      const item = byId.get(id);
+      return item
+        ? { id: item.id, name: item.name, role: item.role, color: item.primaryColor, formality: item.formality, warmth: item.warmthBand, tags: item.styleTags }
+        : { id };
+    }),
+  }));
+
+  const questions: Record<string, SystemOneQuestion> = {};
+  outfits.forEach((_, index) => {
+    questions[`outfit_${index}_fit`] = {
+      type: "noul",
+      instructions: `Outfit #${index + 1}: does this COMPLETE ensemble genuinely read as an outfit for ${context.occasion}${context.season ? ` in ${context.season} weather` : ""}? Judge the whole look, not individual pieces.`,
+    };
+    questions[`outfit_${index}_issue`] = {
+      type: "choice",
+      instructions: `Outfit #${index + 1}: what is the main thing wrong with it, if anything?`,
+      criteria: OCCASION_ISSUES,
+    };
+  });
+
+  const answers = await runDecision(
+    {
+      occasion: context.occasion,
+      season: context.season ?? null,
+      weather: context.weather ? describeWeather(context.weather) : null,
+      style_tags: context.styleTags ?? [],
+      outfits: rendered,
+    },
+    questions,
+  );
+
+  const results = outfits.map((_, index) => {
+    const probability = noulOf(answers, `outfit_${index}_fit`) ?? 0;
+    const issue = choiceOf(answers, `outfit_${index}_issue`)?.choice ?? "unknown";
+    return { ok: probability >= 0.5 && issue === "none", probability, issue };
+  });
+  const failures = results
+    .map((result, index) => (result.ok ? null : `#${index + 1} ${result.issue} (p=${result.probability.toFixed(2)})`))
+    .filter((entry): entry is string => Boolean(entry));
+  return {
+    ok: results.every((result) => result.ok),
+    outfits: results,
+    summary: failures.length ? `Occasion-fit problems: ${failures.join("; ")}` : "All outfits read correctly for the occasion.",
+  };
 }
 
 /**

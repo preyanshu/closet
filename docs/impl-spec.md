@@ -184,36 +184,49 @@ the tool host — the closet is never bulk-uploaded) and a **Clef-flash decision
 cheap typed judgments.
 
 ### Agent core (`services/stylist-agent.ts`)
-- Model: `@cf/meta/llama-3.3-70b-instruct-fp8-fast` (native function calling, 24k ctx),
-  temperature 0, `MAX_AGENT_TURNS = 20` (measured max **8 turns** across 6 live sessions;
-  the cap is headroom against a runaway loop).
-- **5 tools, executed locally** against the wardrobe (deterministic sort: role order →
-  wear_count desc → id):
+- Model: `@cf/qwen/qwen3-30b-a3b-fp8` by default (MoE, 3B active; 32k ctx), env-overridable
+  via `STYLE_MODEL`. Rolled back from `llama-3.3-70b-instruct-fp8-fast`, whose output rate
+  (204,805 neurons/M) exhausted the 10k/day free tier in a few sessions; qwen3-30b-a3b is
+  ~6.5× cheaper (4,625 in / 30,475 out) and the judgment is delegated to clef-flash anyway.
+  `MAX_AGENT_TURNS = 20` (measured max **8 turns**; headroom against a runaway loop).
+- `STYLIST_SYSTEM` is a **creative stylist brief, not a rulebook** — persona-led ("styling,
+  not a checklist"), occasion/weather reads left to the model's judgment, no hardcoded
+  definitions ("casual = X"). It asks for the model's **best 3–5 looks, fewer if only a few
+  are good** — never padding to a target. Interface rules only: real ids, one `one_piece` OR
+  `base_top`+`bottom`, footwear mandatory, 3–6 pieces, availability.
+- **Temperature** configurable, default **0.8** for creativity (0.5 on the review pass);
+  `runStyleTurn(messages, tools, maxTokens, temperature)`, server clamps 0–1.5.
+- **Weather**: `services/weather.ts` (pure) fetches Open-Meteo current conditions +
+  precipitation chance; `state/use-weather.ts` resolves device location (expo-location, fails
+  soft) and caches 30 min. `describeWeather()` is injected as a `<weather>` line; season band
+  derives from feels-like temp; weather buckets the daily cache key.
+- **Jev-gated self-critique**: after composing, one clef-flash call judges each complete
+  ensemble for the occasion/weather; only a flagged look triggers a re-styling session (with
+  Jev's critique as feedback). Default OFF in dev, ON in prod (`EXPO_PUBLIC_STYLIST_SELF_CRITIQUE`).
+- **5 tools, executed locally** (deterministic sort: role order → wear_count desc → id):
   - `get_wardrobe_overview` — counts by role, palette/tag histograms, favorites, most-worn,
     never-worn, availability summary (orient-first).
   - `search_items` — paginated filter (role/category/colors/style_tags/formality/warmth/
-    query/favorites_only/include_unavailable; page_size ≤ 40), medium index lines. Over-filtered
-    searches **self-relax** (drops warmth→formality→style_tags→colors→category→role, in order)
-    and return hits directly with what was dropped.
-- llama-3.3 tool-call quirk: array args often arrive JSON-stringified
-  (`colors:"[\"black\"]"`); values are revived to real arrays/objects before execution
-  (server normalize + client `runTool`).
-  - `get_items(ids[])` — full-fat detail lines, max 25 (fit, texture, brand, price, cost/wear,
+    query/favorites_only/include_unavailable; page_size ≤ 40); over-filtered searches
+    **self-relax** (drops warmth→colors→style_tags→formality→category→role).
+  - `get_items(ids[])` — full-fat lines, max 25 (fit, texture, brand, price, cost/wear,
     last worn, availability, favorite).
   - `get_saved_looks(limit≤5)` — taste memory; "do not re-propose these exactly".
   - `get_item(id)` — single full-fat line.
-- `STYLIST_SYSTEM` hard rules: only real ids; exactly one `one_piece` OR one `base_top` +
-  `one`bottom`; footwear mandatory; 3–6 items; occasion/season coherence. Final reply is
-  **only** JSON: `{"reply", "outfits":[{"items","label","reason"}]}` — one contract for both
-  lanes (daily lane ignores `reply`, chat renders it as a bubble).
-- `CHAT_SYSTEM` extends it: conversational `reply` (<2 sentences), visibly-different retries
-  after rejects.
+- Tool-call quirk: array args often arrive JSON-stringified (`colors:"[\"black\"]"`); values
+  are revived before execution (server normalize + client `runTool`).
+- **Usage/cost logging**: the worker logs `in`/`out` tokens and estimated neurons per AI call
+  (`NEURON_RATES`), visible in `wrangler dev` output.
+- Final reply is **only** JSON: `{"reply","outfits":[{"items","label","reason"}]}` — one
+  contract for both lanes (daily lane ignores `reply`, chat renders it as a bubble).
+- `CHAT_SYSTEM` extends the brief: conversational `reply` (<2 sentences), visibly-different
+  retries after rejects.
 
 ### Server (`server/src/index.ts`)
-- `POST /v1/style/turn` — thin proxy `{ messages, tools, max_tokens? }` → `{ tool_calls }`
-  (`normalizeToolCalls`, handles function-wrapped/flat shapes) or `{ text }`. Final-turn text
-  unwraps `choices[0].message.content` / structured `response` (llama's `-json` envelope).
-  Messages cap 400 (≈199 tool turns) as a runaway backstop.
+- `POST /v1/style/turn` — thin proxy `{ messages, tools, max_tokens?, temperature? }` →
+  `{ tool_calls }` (`normalizeToolCalls`, handles function-wrapped/flat shapes) or `{ text }`.
+  Model env-overridable via `STYLE_MODEL` (default `qwen3-30b-a3b-fp8`). Final-turn text
+  unwraps `choices[0].message.content` / structured `response`. Messages cap 400.
 - `POST /v1/decide` — thin proxy `{ state, questions, images? }` → `{ answers }` to
   `DECIDE_MODEL = "@cf/cloudflare/clef-flash"` (Jev/System One compatible; ~$0.038/M input,
   no output billing, ~38ms median). Questions are typed: `noul | choice | score`.

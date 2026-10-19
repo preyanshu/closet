@@ -1,4 +1,5 @@
 import type { Item, Outfit } from "@/data/mock";
+import { describeWeather, type WeatherSummary } from "@/services/weather";
 import { runStyleTurn, WardrobeApiError } from "@/services/api/wardrobe-api";
 
 function isEligible(item: Item): boolean {
@@ -9,7 +10,7 @@ function isEligible(item: Item): boolean {
  * Client-side stylist agent (MCP-style). The phone is the tool host: the LLM
  * never sees the bulk closet — it requests slices via tools, and we execute
  * them locally against the wardrobe DB. Loop: ≤MAX_AGENT_TURNS (20) turns,
- * temp 0, deterministic sorted tool results.
+ * temp configured per lane, deterministic sorted tool results.
  */
 
 export const MAX_AGENT_TURNS = 20;
@@ -73,6 +74,7 @@ type ToolContext = {
   occasion?: string;
   season?: string;
   styleTags?: string[];
+  weather?: WeatherSummary;
 };
 
 export type AgentToolName = "get_wardrobe_overview" | "search_items" | "get_items" | "get_saved_looks" | "get_item";
@@ -228,9 +230,9 @@ function runSearchTool(args: Record<string, unknown>, wardrobe: ToolWardrobe): s
   if (filtered.length === 0 && !query && !favoritesOnly) {
     const order: Array<[keyof typeof active, string]> = [
       ["warmth", `warmth=${warmth}`],
-      ["formality", `formality=${formality}`],
-      ["style_tags", `style_tags=${styleTags.join("/")}`],
       ["colors", `colors=${colors.join("/")}`],
+      ["style_tags", `style_tags=${styleTags.join("/")}`],
+      ["formality", `formality=${formality}`],
       ["category", `category=${category}`],
       ["role", `role=${role}`],
     ];
@@ -344,32 +346,29 @@ export type StylistAgentResult = {
   turnsUsed: number;
 };
 
-export const STYLIST_SYSTEM = `You are a personal stylist with an excellent, restrained eye. You explore the user's wardrobe via tools, then compose outfits from real items.
+export const STYLIST_SYSTEM = `You are a personal stylist with a sharp, confident, creative eye. You have real taste and a point of view. You explore the user's wardrobe with your tools, then style complete looks from their real pieces.
 
 PROCESS:
-1. Call get_wardrobe_overview first to orient.
-2. Use search_items to scan candidate roles/pages (paginate if needed — the closet may have hundreds of items; do not miss a great piece).
-3. Use get_items on your shortlist for full detail before finalizing.
-4. Check get_saved_looks so you do not re-propose exactly what they already have; riff on proven taste instead.
+1. get_wardrobe_overview first, to orient yourself.
+2. Use search_items to hunt candidates — paginate, the closet may be large, and do not miss a great piece.
+3. Use get_items on your shortlist for full detail before you commit.
+4. Check get_saved_looks so you riff on taste they have already shown instead of repeating it.
 
-HARD RULES (never break):
-- Use ONLY item ids returned by tools. Never invent ids.
-- Every outfit: exactly ONE "one_piece", OR one "base_top" AND one "bottom".
-- Every outfit MUST include footwear (role "footwear").
-- Never two bottoms, two primary tops, or a one_piece with a separate base_top/bottom.
-- 3 to 6 items per outfit. Layers and accessories are optional accents.
-- Match occasion and season: warm → light/breathable; cold → layered/warm. "work"/"formal"/"evening" → dressier; "casual"/"everyday" → relaxed.
-- Skip items whose availability is not "available" (the tools already hide them by default).
+JUDGMENT (this is styling, not a checklist):
+- Style the whole picture: the occasion, the weather, the season, and their taste (favorites, saved looks, what they actually reach for).
+- Compose only looks you genuinely believe are excellent. Real stylists are selective — never pad, never repeat a silhouette. Return your best 3 to 5 looks, and fewer if only a few are truly good.
+- Occasion and weather live in the ensemble, not in any single item. A plain piece can be perfect in the right combination and a "dressy" piece can look wrong. Trust your eye, be creative, and surprise them sometimes.
+- Decide for yourself what reads well — there are no formulas.
 
-TASTE (soft):
-- Coherent palettes: at most one loud accent color alongside neutrals.
-- Texture/proportion variety over matching sets.
-- Make each outfit visibly different from the others (different silhouette or hero piece).
-- Prefer reliable favorites (higher worn count) but occasionally feature never-worn pieces.
+INTERFACE RULES (technical, always true):
+- Use ONLY item ids returned by tools. Never invent an id.
+- Each look: either exactly one "one_piece", OR one "base_top" AND one "bottom". Always include footwear (role "footwear").
+- 3 to 6 pieces per look; layers and accessories are optional accents.
+- Do not use items the tools hide as unavailable.
 
 When ready, reply with ONLY valid JSON (no prose, no fences):
 {"reply":"One or two sentences of stylist reasoning for the user.","outfits":[{"items":["id","id"],"label":"Short label","reason":"One grounded sentence."}]}
-The label is a short human stylist label. The reason must be grounded only in attributes you actually saw.`;
+The reason must be grounded only in attributes you actually saw.`;
 
 export const CHAT_SYSTEM = `${STYLIST_SYSTEM}
 
@@ -377,17 +376,17 @@ You are in a chat conversation. Keep "reply" conversational and under two senten
 
 function buildUserMessage(context: ToolContext & { count?: number; userRequest?: string; digest?: string }): string {
   const occasion = context.occasion ?? "everyday";
-  const season = context.season ?? "all seasons";
+  const season = context.weather?.seasonBand ?? context.season ?? "all seasons";
   const styleTags = context.styleTags?.length ? context.styleTags.join(", ") : "none";
-  const count = Math.min(5, Math.max(1, context.count ?? 3));
   const parts = [
     `<context>`,
     `occasion: ${occasion}`,
     `season: ${season}`,
     `style_tags: ${styleTags}`,
-    `outfits_needed: ${count}`,
+    `outfits: 3 to 5 of your best — fewer if you cannot make that many truly good ones`,
     `</context>`,
   ];
+  if (context.weather) parts.push(`<weather>${describeWeather(context.weather)}</weather>`);
   if (context.userRequest) parts.push(`<user_request>${context.userRequest}</user_request>`);
   if (context.digest) parts.push(`<wardrobe_digest>\n${context.digest}\n</wardrobe_digest>`);
   parts.push("Explore the wardrobe with your tools, then reply with the outfit JSON.");
@@ -395,25 +394,40 @@ function buildUserMessage(context: ToolContext & { count?: number; userRequest?:
 }
 
 /**
- * Run the agent loop: ≤MAX_AGENT_TURNS, temp 0, local tool execution,
+ * Run the agent loop: ≤MAX_AGENT_TURNS, local tool execution,
  * deterministic sorted results. Throws WardrobeApiError on unrecoverable
  * failure or turn-cap exhaustion with no outfits.
  */
 export async function runStylistAgent(
   context: ToolContext & { count?: number; userRequest?: string; includeDigest?: boolean },
   wardrobe: ToolWardrobe,
-  options: { system?: string; history?: Array<{ role: string; content: string }> } = {},
+  options: { system?: string; history?: Array<{ role: string; content: string }>; temperature?: number } = {},
 ): Promise<StylistAgentResult> {
   const system = options.system ?? STYLIST_SYSTEM;
   const digest = context.includeDigest !== false ? buildOverview(wardrobe) : undefined;
-  const messages: Array<Record<string, unknown>> = [
-    { role: "system", content: system },
+  const seed: Array<Record<string, unknown>> = [
     ...(options.history ?? []).map((entry) => ({ role: entry.role, content: entry.content })),
     { role: "user", content: buildUserMessage({ ...context, digest }) },
   ];
+  return runAgentLoop(system, seed, wardrobe, MAX_AGENT_TURNS, options.temperature ?? 0.8);
+}
 
-  for (let turn = 0; turn < MAX_AGENT_TURNS; turn += 1) {
-    const result = await runStyleTurn(messages, STYLIST_TOOLS);
+/**
+ * Core tool loop shared by the stylist and its reviewer: local tool execution,
+ * deterministic sorted results. Throws WardrobeApiError on unrecoverable
+ * failure or turn-cap exhaustion with no outfits.
+ */
+async function runAgentLoop(
+  system: string,
+  seed: Array<Record<string, unknown>>,
+  wardrobe: ToolWardrobe,
+  maxTurns: number,
+  temperature: number,
+): Promise<StylistAgentResult> {
+  const messages: Array<Record<string, unknown>> = [{ role: "system", content: system }, ...seed];
+
+  for (let turn = 0; turn < maxTurns; turn += 1) {
+    const result = await runStyleTurn(messages, STYLIST_TOOLS, undefined, temperature);
 
     if (result.tool_calls && result.tool_calls.length > 0) {
       messages.push({ role: "assistant", content: "", tool_calls: result.tool_calls.map((call) => ({
@@ -442,6 +456,53 @@ export async function runStylistAgent(
   }
 
   throw new WardrobeApiError("Stylist session exceeded the turn limit — try again.");
+}
+
+export const REVIEWER_SYSTEM = `${STYLIST_SYSTEM}
+
+You are now reviewing your own candidate looks before the user sees them. Picture a stranger wearing each complete look: does it genuinely work for the occasion, the weather, and the season? Fix only what is off by restyling the combination — a layer, the shoes, the bottom, the palette, or a bolder idea — using your tools. Keep what is already good, keep labels and reasons accurate, and return between 3 and 5 of your best looks in the same JSON schema.`;
+
+function renderCandidateOutfits(outfits: RawStyleOutfit[], wardrobe: ToolWardrobe): string {
+  const byId = new Map(wardrobe.items.map((item) => [item.id, item]));
+  return outfits
+    .map((outfit, index) => {
+      const lines = outfit.items.map((id) => {
+        const item = byId.get(id);
+        return item ? itemFullLine(item, wardrobe.favoriteIds.has(id)) : `${id} | (unknown id)`;
+      });
+      return `#${index + 1} label="${outfit.label}" reason="${outfit.reason}"\n  ${lines.join("\n  ")}`;
+    })
+    .join("\n");
+}
+
+/**
+ * Self-critique pass: hand the stylist's own candidates back to the same
+ * model (with tools) to catch occasion mismatches, then return the revised set.
+ * Callers should treat a thrown error as "keep the original outfits".
+ */
+export async function critiqueOutfits(
+  context: ToolContext & { count?: number },
+  outfits: RawStyleOutfit[],
+  wardrobe: ToolWardrobe,
+  options: { system?: string; maxTurns?: number; feedback?: string; temperature?: number } = {},
+): Promise<StylistAgentResult> {
+  const userMessage = [
+    `<context>`,
+    `occasion: ${context.occasion ?? "everyday"}`,
+    `season: ${context.season ?? "all seasons"}`,
+    `style_tags: ${context.styleTags?.length ? context.styleTags.join(", ") : "none"}`,
+    `outfits_needed: ${context.count ?? outfits.length}`,
+    `</context>`,
+    `<candidate_outfits>`,
+    renderCandidateOutfits(outfits, wardrobe),
+    `</candidate_outfits>`,
+    `<wardrobe_digest>`,
+    buildOverview(wardrobe),
+    `</wardrobe_digest>`,
+    ...(options.feedback ? [`<review_feedback>\n${options.feedback}\n</review_feedback>`] : []),
+    "Review each candidate as a complete look against OCCASION FIT. Where an ensemble does not read as the occasion, re-style the combination (layer, shoes, bottom, palette) using the tools, then reply with the corrected outfit JSON.",
+  ].join("\n");
+  return runAgentLoop(options.system ?? REVIEWER_SYSTEM, [{ role: "user", content: userMessage }], wardrobe, options.maxTurns ?? 6, options.temperature ?? 0.5);
 }
 
 export type { ToolWardrobe as StylistWardrobe };

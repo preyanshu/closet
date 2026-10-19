@@ -73,6 +73,7 @@ export async function runStyleTurn(
   messages: Array<Record<string, unknown>>,
   tools: Array<Record<string, unknown>>,
   maxTokens?: number,
+  temperature?: number,
 ): Promise<StyleTurnResult> {
   if (!isWardrobeApiConfigured()) {
     throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
@@ -80,7 +81,7 @@ export async function runStyleTurn(
   const response = await expoFetch(endpoint("/v1/style/turn"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, tools, max_tokens: maxTokens ?? 1200 }),
+    body: JSON.stringify({ messages, tools, max_tokens: maxTokens ?? 1200, temperature: temperature ?? 0.8 }),
   });
   const text = await response.text();
   if (response.status !== 200) {

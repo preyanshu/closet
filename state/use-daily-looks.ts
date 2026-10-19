@@ -4,6 +4,7 @@ import { triageWardrobeDiff, type WardrobeDiff } from "@/services/decision";
 import { composeOutfitsAI, generateOutfitsForToday, type OutfitContext } from "@/services/outfit-engine";
 import { PREFERENCE_KEYS, readPreferenceValue, writePreference } from "@/services/storage/wardrobe-repository";
 import { useCloset } from "@/state/closet-context";
+import { useWeather } from "@/state/use-weather";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type LooksStatus = "loading" | "ready" | "error";
@@ -122,6 +123,7 @@ export function useDailyLooks(
   options: { aestheticId?: string; count?: number } = {},
 ): DailyLooks & { refresh: () => void } {
   const { items, isHydrated, favoriteIds, savedLooks } = useCloset();
+  const { weather, status: weatherStatus } = useWeather();
   const aestheticId = options.aestheticId ?? "all";
   const count = options.count ?? 3;
   const [state, setState] = useState<DailyLooks>({ looks: [], status: "loading", fromCache: false });
@@ -136,10 +138,15 @@ export function useDailyLooks(
 
   useEffect(() => {
     if (!isHydrated) return;
+    // Wait for the weather lookup to settle (ready/denied/error) so we generate
+    // once — either styled to today's weather or plainly, never both.
+    if (weatherStatus === "idle" || weatherStatus === "loading") return;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const dateKey = toDateKey();
-    const cacheKey = `${PREFERENCE_KEYS.dailyLooks}:${dateKey}:${aestheticId}:${count}`;
+    // Weather bucket in the key so a meaningful shift refreshes the day's looks.
+    const weatherKey = weather ? `${weather.seasonBand}-${Math.round(weather.tempC / 3) * 3}` : "na";
+    const cacheKey = `${PREFERENCE_KEYS.dailyLooks}:${dateKey}:${aestheticId}:${count}:${weatherKey}`;
     const hash = wardrobeHash(items);
 
     const persist = (looks: Outfit[], isFallback = false) => {
@@ -159,6 +166,7 @@ export function useDailyLooks(
         const result = await composeOutfitsAI(context, items, {
           favoriteIds: [...favoriteIds],
           savedLooks,
+          weather: weather ?? undefined,
         });
         persist(result.outfits);
         if (active) setState({ looks: result.outfits, status: "ready", refreshedAt: new Date().toISOString(), fromCache: false });
@@ -234,7 +242,7 @@ export function useDailyLooks(
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [isHydrated, items, context, nonce, aestheticId, count, favoriteIds, savedLooks]);
+  }, [isHydrated, items, context, nonce, aestheticId, count, favoriteIds, savedLooks, weather, weatherStatus]);
 
   const refresh = () => setNonce((value) => value + 1);
   return { ...state, refresh };

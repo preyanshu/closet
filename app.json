@@ -27,7 +27,13 @@
       "expo-image",
       "expo-status-bar",
       "expo-font",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Wardrobe to use your location to style for today's weather."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

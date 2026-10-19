@@ -13,12 +13,41 @@ import { cors } from "hono/cors";
 type Env = {
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
+  DETECT_MODEL?: string;
+  STAGE_MODEL?: string;
+  STYLE_MODEL?: string;
+  DECIDE_MODEL?: string;
 };
 
-const DETECT_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
-const STAGE_MODEL = "@cf/black-forest-labs/flux-2-klein-4b";
-const STYLE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-const DECIDE_MODEL = "@cf/cloudflare/clef-flash";
+/**
+ * Model defaults, overridable per-deployment via env (server/.dev.vars).
+ *
+ * STYLE was llama-3.3-70b-fp8-fast: its output rate (204,805 neurons/M) burned
+ * the 10k/day free tier in a handful of agent sessions. qwen3-30b-a3b-fp8 is a
+ * MoE (3B active) tuned for instruction-following/agent use at ~6.5x less
+ * (4,625 in / 30,475 out). Judgment is delegated to clef-flash (3,455/M, no
+ * output billing), so the stylist model only needs to call tools + emit JSON.
+ */
+const DEFAULT_MODELS = {
+  detect: "@cf/meta/llama-3.2-11b-vision-instruct",
+  stage: "@cf/black-forest-labs/flux-2-klein-4b",
+  style: "@cf/qwen/qwen3-30b-a3b-fp8",
+  decide: "@cf/cloudflare/clef-flash",
+};
+
+/** Neurons per million tokens (Workers AI list rates) — usage/cost logging only. */
+const NEURON_RATES: Record<string, { input: number; output: number }> = {
+  "@cf/qwen/qwen3-30b-a3b-fp8": { input: 4625, output: 30475 },
+  "@cf/meta/llama-3.3-70b-instruct-fp8-fast": { input: 26668, output: 204805 },
+  "@cf/meta/llama-3.1-8b-instruct-fp8-fast": { input: 4119, output: 34868 },
+  "@cf/meta/llama-3.1-8b-instruct-fp8": { input: 13778, output: 26128 },
+  "@cf/meta/llama-3.2-3b-instruct": { input: 4625, output: 30475 },
+  "@cf/meta/llama-3.2-1b-instruct": { input: 2457, output: 18252 },
+  "@cf/openai/gpt-oss-20b": { input: 18182, output: 27273 },
+  "@cf/mistralai/mistral-small-3.1-24b-instruct": { input: 31876, output: 50488 },
+  "@cf/meta/llama-3.2-11b-vision-instruct": { input: 4410, output: 61493 },
+  "@cf/cloudflare/clef-flash": { input: 3455, output: 0 },
+};
 
 const DEFAULT_DETECT_PROMPT = `You are a garment attribute extractor. Given a single clothing item photo, return ONLY valid JSON (no prose, no markdown fences) with exactly these fields:
 {
@@ -50,7 +79,8 @@ app.post("/v1/detect", async (c) => {
   if (!image || typeof image.arrayBuffer !== "function") return c.json({ error: "multipart field 'image' is required" }, 400);
 
   const dataUri = await fileToDataUri(image);
-  const response = await fetch(aiRunUrl(creds.accountId, DETECT_MODEL), {
+  const model = c.env.DETECT_MODEL || DEFAULT_MODELS.detect;
+  const response = await fetch(aiRunUrl(creds.accountId, model), {
     method: "POST",
     headers: { Authorization: `Bearer ${creds.token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -70,6 +100,7 @@ app.post("/v1/detect", async (c) => {
   });
 
   const data = await readJson(response);
+  logUsage("detect", model, data);
   if (!response.ok || data?.success === false) return c.json({ error: describeError(data, response.status) }, 502);
   return c.json({ text: extractText(data?.result) });
 });
@@ -90,13 +121,14 @@ app.post("/v1/stage", async (c) => {
   outbound.append("height", "1024");
   outbound.append("guidance", "3.0");
 
-  const response = await fetch(aiRunUrl(creds.accountId, STAGE_MODEL), {
+  const response = await fetch(aiRunUrl(creds.accountId, c.env.STAGE_MODEL || DEFAULT_MODELS.stage), {
     method: "POST",
     headers: { Authorization: `Bearer ${creds.token}` },
     body: outbound,
   });
 
   const data = await readJson(response);
+  logUsage("stage", c.env.STAGE_MODEL || DEFAULT_MODELS.stage, data);
   if (!response.ok || data?.success === false) return c.json({ error: describeError(data, response.status) }, 502);
 
   const imageData = data?.result?.image;
@@ -122,18 +154,20 @@ app.post("/v1/style/turn", async (c) => {
   if (!tools || tools.length === 0) return c.json({ error: "body.tools must be a non-empty array" }, 400);
   if (messages.length > 400) return c.json({ error: `body.messages up to 400; received ${messages.length}` }, 400);
 
-  const response = await fetch(aiRunUrl(creds.accountId, STYLE_MODEL), {
+  const model = c.env.STYLE_MODEL || DEFAULT_MODELS.style;
+  const response = await fetch(aiRunUrl(creds.accountId, model), {
     method: "POST",
     headers: { Authorization: `Bearer ${creds.token}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       messages,
       tools,
       max_tokens: Math.min(2000, Math.max(200, Number(body?.max_tokens ?? 1200))),
-      temperature: 0,
+      temperature: Math.min(1.5, Math.max(0, Number(body?.temperature ?? 0.8))),
     }),
   });
 
   const data = await readJson(response);
+  logUsage("style.turn", model, data);
   if (!response.ok || data?.success === false) return c.json({ error: describeError(data, response.status) }, 502);
 
   const result = data?.result ?? data;
@@ -166,13 +200,15 @@ app.post("/v1/decide", async (c) => {
     }
   }
 
-  const response = await fetch(aiRunUrl(creds.accountId, DECIDE_MODEL), {
+  const model = c.env.DECIDE_MODEL || DEFAULT_MODELS.decide;
+  const response = await fetch(aiRunUrl(creds.accountId, model), {
     method: "POST",
     headers: { Authorization: `Bearer ${creds.token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ state, questions, images: Array.isArray(body?.images) ? body.images : undefined }),
   });
 
   const data = await readJson(response);
+  logUsage("decide", model, data);
   if (!response.ok || data?.success === false) return c.json({ error: describeError(data, response.status) }, 502);
   return c.json({ answers: data?.result?.answers ?? data?.answers ?? {} });
 });
@@ -205,6 +241,24 @@ async function readJson(response: Response): Promise<any> {
 function describeError(data: any, status: number): string {
   const detail = data?.errors ? JSON.stringify(data.errors) : data?.error ?? data?.raw ?? "";
   return `Cloudflare AI request failed (${status}): ${String(detail).slice(0, 200)}`;
+}
+
+/**
+ * Log token usage + an estimated neuron cost per AI call so we can see where the
+ * daily free allocation goes. Reads Workers AI usage from either the wrapped
+ * (`result.usage`) or flat shape; prints `usage=unavailable` when absent.
+ */
+function logUsage(label: string, model: string, data: any): void {
+  const usage = data?.result?.usage ?? data?.usage;
+  const input = Number(usage?.prompt_tokens ?? 0);
+  const output = Number(usage?.completion_tokens ?? 0);
+  if (!input && !output) {
+    console.log(`[ai] ${label} model=${model} usage=unavailable`);
+    return;
+  }
+  const rate = NEURON_RATES[model];
+  const neurons = rate ? (input * rate.input + output * rate.output) / 1_000_000 : null;
+  console.log(`[ai] ${label} model=${model} in=${input} out=${output} neurons=${neurons == null ? "?" : neurons.toFixed(2)}`);
 }
 
 type SystemOneQuestion = {

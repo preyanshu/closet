@@ -1,7 +1,13 @@
 import { clothingItems, type Item, type Outfit } from "@/data/mock";
 import { WardrobeApiError } from "@/services/api/wardrobe-api";
-import { runStylistAgent, type RawStyleOutfit, type StylistWardrobe } from "@/services/stylist-agent";
+import { runStylistAgent, critiqueOutfits, type RawStyleOutfit, type StylistWardrobe } from "@/services/stylist-agent";
+import { judgeOccasionFit } from "@/services/decision";
+import type { WeatherSummary } from "@/services/weather";
 import type { ItemRole, OutfitItemRef } from "@/types/domain";
+
+/** The stylist returns its best 3–5 looks; we never pad toward a fixed target. */
+const MIN_OUTFITS = 3;
+const MAX_OUTFITS = 5;
 
 /**
  * Rules-first outfit composition engine (PR4).
@@ -603,7 +609,27 @@ export type ComposeAIOptions = {
   system?: string;
   /** Prior messages for chat continuation. */
   history?: Array<{ role: string; content: string }>;
+  /** Today's weather (already fetched) — the stylist styles to it. */
+  weather?: WeatherSummary;
+  /** Sampling temperature for the stylist model (default 0.8; higher = more creative). */
+  temperature?: number;
+  /**
+   * Run a Jev-gated review pass: Jev judges whether the ensembles already read
+   * for the occasion, and only a flagged look triggers a re-styling session.
+   * Defaults to OFF in development and ON in production; override per call or
+   * with EXPO_PUBLIC_STYLIST_SELF_CRITIQUE=0|1.
+   */
+  selfCritique?: boolean;
 };
+
+/** Dev builds skip the second call by default to conserve the AI quota. */
+function resolveSelfCritique(explicit: boolean | undefined): boolean {
+  if (explicit !== undefined) return explicit;
+  const flag = process.env.EXPO_PUBLIC_STYLIST_SELF_CRITIQUE;
+  if (flag === "1" || flag === "true") return true;
+  if (flag === "0" || flag === "false") return false;
+  return !((globalThis as { __DEV__?: boolean }).__DEV__ === true);
+}
 
 /**
  * Agent-native composition. Runs the client-side tool loop against the
@@ -618,7 +644,9 @@ export async function composeOutfitsAI(
   const pool = items.filter(isEligible);
   if (pool.length < 6) throw new WardrobeApiError("Not enough wearable pieces to style a look.");
 
-  const count = Math.max(2, context.count ?? 3);
+  // The model decides how many looks are actually good (3–5); we only floor it
+  // so the screen is never empty, and never pad toward a fixed target.
+  const season = context.season ?? options.weather?.seasonBand;
   const wardrobe: StylistWardrobe = {
     items,
     favoriteIds: new Set(options.favoriteIds ?? []),
@@ -628,24 +656,56 @@ export async function composeOutfitsAI(
   const result = await runStylistAgent(
     {
       occasion: context.occasion,
-      season: context.season,
+      season,
       styleTags: context.styleTags,
-      count,
+      weather: options.weather,
       userRequest: options.userRequest,
     },
     wardrobe,
-    { system: options.system, history: options.history },
+    { system: options.system, history: options.history, temperature: options.temperature },
   );
 
-  const verified = verifyAndRepairOutfits(result.outfits, pool, context);
+  let source = result.outfits;
+  let reply = result.reply;
+  let turnsUsed = result.turnsUsed;
+
+  // Jev decides first (one ~40ms Clef call): if the ensembles already read for
+  // the occasion, we skip the expensive re-styling session entirely. Only a
+  // flagged look triggers the model review — with Jev's critique as feedback.
+  if (resolveSelfCritique(options.selfCritique)) {
+    try {
+      const fit = await judgeOccasionFit(
+        { occasion: context.occasion ?? "everyday", season, styleTags: context.styleTags, weather: options.weather },
+        result.outfits.map((outfit) => ({ label: outfit.label, item_ids: outfit.items, reason: outfit.reason })),
+        pool,
+      );
+      if (!fit.ok) {
+        const reviewed = await critiqueOutfits(
+          { occasion: context.occasion, season, styleTags: context.styleTags, weather: options.weather, count: MAX_OUTFITS },
+          result.outfits,
+          wardrobe,
+          { feedback: fit.summary },
+        );
+        if (reviewed.outfits.length > 0) {
+          source = reviewed.outfits;
+          reply = reviewed.reply ?? reply;
+          turnsUsed += reviewed.turnsUsed;
+        }
+      }
+    } catch {
+      // keep the stylist's original outfits
+    }
+  }
+
+  const verified = verifyAndRepairOutfits(source, pool, { ...context, season, count: MAX_OUTFITS });
   if (verified.length === 0) throw new WardrobeApiError("The stylist returned no valid combos — try again.");
 
-  if (verified.length < count) {
-    for (const filler of composeOutfits({ ...context, count }, pool)) {
-      if (verified.length >= count) break;
+  if (verified.length < MIN_OUTFITS) {
+    for (const filler of composeOutfits({ ...context, season, count: MIN_OUTFITS }, pool)) {
+      if (verified.length >= MIN_OUTFITS) break;
       if (!verified.some((entry) => entry.itemIds.join(",") === filler.itemIds.join(","))) verified.push(filler);
     }
   }
 
-  return { outfits: verified.slice(0, count), reply: result.reply, turnsUsed: result.turnsUsed };
+  return { outfits: verified.slice(0, MAX_OUTFITS), reply, turnsUsed };
 }
