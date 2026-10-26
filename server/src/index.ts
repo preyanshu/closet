@@ -325,6 +325,13 @@ function extractText(result: unknown): string {
     text?: string;
   };
   const content = value?.choices?.[0]?.message?.content;
+  // Chat-completion shape: if the model produced no content (e.g. it spent the
+  // whole budget on hidden reasoning), return empty — never the raw envelope.
+  if (value?.choices?.[0]?.message) {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content) && typeof content?.[0]?.text === "string") return content[0].text;
+    return "";
+  }
   if (typeof content === "string") return content;
   if (Array.isArray(content) && typeof content?.[0]?.text === "string") return content[0].text;
   if (typeof value?.response === "string") return value.response;

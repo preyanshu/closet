@@ -5,8 +5,7 @@ import { judgeOccasionFit } from "@/services/decision";
 import type { WeatherSummary } from "@/services/weather";
 import type { ItemRole, OutfitItemRef } from "@/types/domain";
 
-/** The stylist returns its best 3–5 looks; we never pad toward a fixed target. */
-const MIN_OUTFITS = 3;
+/** Upper bound on looks per batch. We never pad — fewer is fine. */
 const MAX_OUTFITS = 5;
 
 /**
@@ -556,12 +555,20 @@ export function verifyAndRepairOutfits(raw: RawStyleOutfit[], wardrobe: Item[], 
 
   for (const style of raw) {
     const seenIds = new Set<string>();
+    const seenRoles = new Set<ItemRole>();
     const pieces = style.items
       .map((id) => byId.get(id))
       .filter((item): item is Item => Boolean(item))
       .filter((item) => {
         if (seenIds.has(item.id)) return false;
         seenIds.add(item.id);
+        return true;
+      })
+      // One item per slot: drop duplicate roles (e.g. two pairs of shoes) and
+      // keep the first the stylist chose.
+      .filter((item) => {
+        if (seenRoles.has(item.role)) return false;
+        seenRoles.add(item.role);
         return true;
       });
 
@@ -633,8 +640,8 @@ function resolveSelfCritique(explicit: boolean | undefined): boolean {
 
 /**
  * Agent-native composition. Runs the client-side tool loop against the
- * wardrobe, validates/repairs with the deterministic rules, and tops up with
- * the rules engine only when the agent returns fewer than requested.
+ * wardrobe and validates/repairs the model's looks with deterministic rules.
+ * Never pads: if the stylist returns one good look, we surface one.
  */
 export async function composeOutfitsAI(
   context: OutfitContext = {},
@@ -644,8 +651,8 @@ export async function composeOutfitsAI(
   const pool = items.filter(isEligible);
   if (pool.length < 6) throw new WardrobeApiError("Not enough wearable pieces to style a look.");
 
-  // The model decides how many looks are actually good (3–5); we only floor it
-  // so the screen is never empty, and never pad toward a fixed target.
+  // The model decides how many looks are actually good (up to 5); we never pad
+  // toward a fixed target — one great look beats three mediocre ones.
   const season = context.season ?? options.weather?.seasonBand;
   const wardrobe: StylistWardrobe = {
     items,
@@ -700,12 +707,7 @@ export async function composeOutfitsAI(
   const verified = verifyAndRepairOutfits(source, pool, { ...context, season, count: MAX_OUTFITS });
   if (verified.length === 0) throw new WardrobeApiError("The stylist returned no valid combos — try again.");
 
-  if (verified.length < MIN_OUTFITS) {
-    for (const filler of composeOutfits({ ...context, season, count: MIN_OUTFITS }, pool)) {
-      if (verified.length >= MIN_OUTFITS) break;
-      if (!verified.some((entry) => entry.itemIds.join(",") === filler.itemIds.join(","))) verified.push(filler);
-    }
-  }
-
+  // Quality over quantity: never substitute rules-engine looks. If the stylist
+  // produced a single great outfit, we show a single great outfit.
   return { outfits: verified.slice(0, MAX_OUTFITS), reply, turnsUsed };
 }

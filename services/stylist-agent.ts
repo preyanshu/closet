@@ -14,6 +14,8 @@ function isEligible(item: Item): boolean {
  */
 
 export const MAX_AGENT_TURNS = 20;
+/** Server caps a turn at 2000; qwen3's hidden reasoning needs the headroom. */
+const AGENT_MAX_TOKENS = 2000;
 export const SEARCH_PAGE_DEFAULT = 20;
 export const SEARCH_PAGE_MAX = 40;
 export const GET_ITEMS_MAX = 25;
@@ -327,15 +329,89 @@ export function runTool(name: AgentToolName | string, rawArgs: Record<string, un
 
 function parseJsonPayload(text: string): { reply?: string; outfits?: Array<{ items?: string[]; label?: string; reason?: string }> } | null {
   const trimmed = text.trim();
+  if (!trimmed) return null;
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
   const start = trimmed.indexOf("{");
-  if (start < 0) return null;
   const end = trimmed.lastIndexOf("}");
-  if (end <= start) return null;
-  try {
-    return JSON.parse(trimmed.slice(start, end + 1));
-  } catch {
-    return null;
+  const braced = start >= 0 && end > start ? trimmed.slice(start, end + 1) : undefined;
+  for (const candidate of [trimmed, fenced, braced]) {
+    if (!candidate) continue;
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      /* try the next slice */
+    }
   }
+  return null;
+}
+
+function reviveItems(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map(String);
+    } catch {
+      /* not a stringified array */
+    }
+  }
+  return [];
+}
+
+/**
+ * Salvage complete outfit objects from malformed JSON — models occasionally
+ * close the last look with `]` instead of `}`. We scan balanced brace pairs
+ * (string-aware) and keep every object that has an `items` array, so one bad
+ * trailing look never discards the whole reply.
+ */
+function extractOutfitsLoose(text: string): { reply?: string; outfits: Array<{ items: string[]; label?: string; reason?: string }> } | null {
+  const stack: number[] = [];
+  const found = new Map<string, { items: string[]; label?: string; reason?: string }>();
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") stack.push(i);
+    else if (ch === "}" && stack.length > 0) {
+      const start = stack.pop() as number;
+      const slice = text.slice(start, i + 1);
+      try {
+        const obj = JSON.parse(slice) as { items?: unknown; label?: unknown; reason?: unknown };
+        const items = reviveItems(obj.items);
+        if (items.length > 0 && !found.has(items.join(","))) {
+          found.set(items.join(","), {
+            items,
+            label: typeof obj.label === "string" ? obj.label : undefined,
+            reason: typeof obj.reason === "string" ? obj.reason : undefined,
+          });
+        }
+      } catch {
+        /* not a complete object */
+      }
+    }
+  }
+  if (found.size === 0) return null;
+  const replyMatch = /"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
+  let reply: string | undefined;
+  if (replyMatch) {
+    try {
+      reply = JSON.parse(`"${replyMatch[1]}"`);
+    } catch {
+      reply = replyMatch[1];
+    }
+  }
+  return { reply, outfits: [...found.values()] };
 }
 
 export type RawStyleOutfit = { items: string[]; label: string; reason: string };
@@ -349,8 +425,8 @@ export type StylistAgentResult = {
 export const STYLIST_SYSTEM = `You are a personal stylist with a sharp, confident, creative eye. You have real taste and a point of view. You explore the user's wardrobe with your tools, then style complete looks from their real pieces.
 
 PROCESS:
-1. get_wardrobe_overview first, to orient yourself.
-2. Use search_items to hunt candidates — paginate, the closet may be large, and do not miss a great piece.
+1. get_wardrobe_overview first, to orient yourself. The digest is only counts and a few favorites — it is NOT the pieces themselves.
+2. Open the actual pieces with tools before you compose: search_items with no filters returns the full list (paginate if needed), then get_items on your shortlist for detail. Never compose from memory of the digest.
 3. Use get_items on your shortlist for full detail before you commit.
 4. Check get_saved_looks so you riff on taste they have already shown instead of repeating it.
 
@@ -362,13 +438,14 @@ JUDGMENT (this is styling, not a checklist):
 
 INTERFACE RULES (technical, always true):
 - Use ONLY item ids returned by tools. Never invent an id.
-- Each look: either exactly one "one_piece", OR one "base_top" AND one "bottom". Always include footwear (role "footwear").
-- 3 to 6 pieces per look; layers and accessories are optional accents.
+- Each look: either exactly one "one_piece", OR one "base_top" AND one "bottom". Always include exactly one "footwear".
+- One item per slot — never two bottoms, two tops, two pairs of shoes, or two of the same accessory. Layers and accessories are optional accents.
+- 3 to 6 pieces per look.
 - Do not use items the tools hide as unavailable.
 
 When ready, reply with ONLY valid JSON (no prose, no fences):
 {"reply":"One or two sentences of stylist reasoning for the user.","outfits":[{"items":["id","id"],"label":"Short label","reason":"One grounded sentence."}]}
-The reason must be grounded only in attributes you actually saw.`;
+The label and reason must describe only the pieces actually listed in that look's "items" — never name a garment you did not include. Ground every claim in attributes you actually saw.`;
 
 export const CHAT_SYSTEM = `${STYLIST_SYSTEM}
 
@@ -423,24 +500,46 @@ async function runAgentLoop(
   wardrobe: ToolWardrobe,
   maxTurns: number,
   temperature: number,
+  requireToolEvidence = true,
 ): Promise<StylistAgentResult> {
   const messages: Array<Record<string, unknown>> = [{ role: "system", content: system }, ...seed];
+  let repaired = false;
+  let nudges = 0;
+  const seenIds = new Set<string>();
+
+  // Record which real item ids the model has actually been shown, so it can
+  // never compose from guessed ids (the digest is counts, not the pieces).
+  const recordOutput = (output: string) => {
+    for (const item of wardrobe.items) {
+      if (seenIds.has(item.id) || !output.includes(item.id)) continue;
+      const escaped = item.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`(^|[^A-Za-z0-9_-])${escaped}([^A-Za-z0-9_-]|$)`).test(output)) seenIds.add(item.id);
+    }
+  };
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
-    const result = await runStyleTurn(messages, STYLIST_TOOLS, undefined, temperature);
+    // qwen3 reasons before answering; the full budget (server caps at 2000)
+    // leaves room for both that reasoning and the multi-look JSON.
+    const result = await runStyleTurn(messages, STYLIST_TOOLS, AGENT_MAX_TOKENS, temperature);
 
     if (result.tool_calls && result.tool_calls.length > 0) {
+      if (process.env.EXPO_PUBLIC_DEBUG_STYLIST === "1") {
+        console.warn(`[stylist] turn ${turn + 1}: tools=${result.tool_calls.map((call) => call.name).join(",")}`);
+      }
       messages.push({ role: "assistant", content: "", tool_calls: result.tool_calls.map((call) => ({
         id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) },
       })) });
       for (const call of result.tool_calls) {
         const output = runTool(call.name, call.arguments, wardrobe);
+        recordOutput(output);
         messages.push({ role: "tool", tool_call_id: call.id, content: output });
       }
       continue;
     }
 
-    const parsed = parseJsonPayload(result.text ?? "");
+    const text = result.text ?? "";
+    let parsed = parseJsonPayload(text);
+    if (!parsed || !Array.isArray(parsed.outfits)) parsed = extractOutfitsLoose(text);
     if (parsed && Array.isArray(parsed.outfits)) {
       const outfits: RawStyleOutfit[] = parsed.outfits
         .filter((outfit) => Array.isArray(outfit.items) && outfit.items.length > 0)
@@ -449,7 +548,43 @@ async function runAgentLoop(
           label: typeof outfit.label === "string" ? outfit.label.slice(0, 60) : "Styled look",
           reason: typeof outfit.reason === "string" ? outfit.reason.slice(0, 400) : "",
         }));
-      if (outfits.length > 0) return { outfits, reply: parsed.reply, turnsUsed: turn + 1 };
+
+      if (outfits.length > 0) {
+        if (!requireToolEvidence) return { outfits, reply: parsed.reply, turnsUsed: turn + 1 };
+
+        const unseen = [...new Set(outfits.flatMap((outfit) => outfit.items))].filter((id) => !seenIds.has(id));
+        if ((seenIds.size === 0 || unseen.length > 0) && nudges < 2) {
+          nudges += 1;
+          if (result.text) messages.push({ role: "assistant", content: result.text });
+          messages.push({
+            role: "user",
+            content: seenIds.size === 0
+              ? "You replied without opening the wardrobe. The digest is only counts — do not guess ids or names. Call search_items with no filters (the full list) or get_items now, then compose only from pieces you actually saw."
+              : `You used item ids that no tool showed you: ${unseen.slice(0, 12).join(", ")}. Fetch real pieces with search_items/get_items and use only ids from tool results.`,
+          });
+          continue;
+        }
+
+        // Never surface an id the model was never shown.
+        const grounded = outfits.filter((outfit) => outfit.items.every((id) => seenIds.has(id)));
+        if (grounded.length > 0) return { outfits: grounded, reply: parsed.reply, turnsUsed: turn + 1 };
+      }
+    }
+
+    // One repair attempt: drop reasoning (`/no_think`) and ask for compact JSON.
+    if (process.env.EXPO_PUBLIC_DEBUG_STYLIST === "1") {
+      console.warn(`[stylist] unparseable final text (turn ${turn + 1}, ${result.text?.length ?? 0} chars):\n${(result.text ?? "").slice(0, 1200)}`);
+    }
+    if (!repaired) {
+      repaired = true;
+      // Force non-thinking for the repair so reasoning can't eat the budget.
+      messages[0] = { role: "system", content: `${system}\n\n/no_think` };
+      if (result.text) messages.push({ role: "assistant", content: result.text });
+      messages.push({
+        role: "user",
+        content: "That was not valid JSON (or was cut off). Reply now with ONLY the JSON object — no prose, no fences. At most 3 looks, each reason under 20 words.",
+      });
+      continue;
     }
 
     throw new WardrobeApiError("Stylist returned unparseable output — try again.");
@@ -502,7 +637,7 @@ export async function critiqueOutfits(
     ...(options.feedback ? [`<review_feedback>\n${options.feedback}\n</review_feedback>`] : []),
     "Review each candidate as a complete look against OCCASION FIT. Where an ensemble does not read as the occasion, re-style the combination (layer, shoes, bottom, palette) using the tools, then reply with the corrected outfit JSON.",
   ].join("\n");
-  return runAgentLoop(options.system ?? REVIEWER_SYSTEM, [{ role: "user", content: userMessage }], wardrobe, options.maxTurns ?? 6, options.temperature ?? 0.5);
+  return runAgentLoop(options.system ?? REVIEWER_SYSTEM, [{ role: "user", content: userMessage }], wardrobe, options.maxTurns ?? 6, options.temperature ?? 0.5, false);
 }
 
 export type { ToolWardrobe as StylistWardrobe };

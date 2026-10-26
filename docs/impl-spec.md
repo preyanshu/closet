@@ -188,12 +188,20 @@ cheap typed judgments.
   via `STYLE_MODEL`. Rolled back from `llama-3.3-70b-instruct-fp8-fast`, whose output rate
   (204,805 neurons/M) exhausted the 10k/day free tier in a few sessions; qwen3-30b-a3b is
   ~6.5× cheaper (4,625 in / 30,475 out) and the judgment is delegated to clef-flash anyway.
-  `MAX_AGENT_TURNS = 20` (measured max **8 turns**; headroom against a runaway loop).
+  `MAX_AGENT_TURNS = 20` (headroom against a runaway loop). Each turn gets the server's full
+  **2000-token** budget: qwen3 emits hidden reasoning before the answer, and a smaller budget
+  truncates the multi-look JSON. One repair turn follows any unparseable/empty final answer,
+  with `/no_think` forced into the system so reasoning cannot eat the budget again.
+- **Tool evidence is enforced**: the loop records every item id a tool actually returned and
+  rejects/nudges any answer that names ids never shown (the digest is counts-only, so a
+  no-tool answer would be guessing). Complete looks are also salvaged from malformed JSON
+  (e.g. a missing `}` on the last look) instead of discarding the whole reply.
 - `STYLIST_SYSTEM` is a **creative stylist brief, not a rulebook** — persona-led ("styling,
   not a checklist"), occasion/weather reads left to the model's judgment, no hardcoded
   definitions ("casual = X"). It asks for the model's **best 3–5 looks, fewer if only a few
   are good** — never padding to a target. Interface rules only: real ids, one `one_piece` OR
-  `base_top`+`bottom`, footwear mandatory, 3–6 pieces, availability.
+  `base_top`+`bottom`, exactly one footwear, **one item per slot**, 3–6 pieces, availability,
+  and labels/reasons that name only the pieces actually listed.
 - **Temperature** configurable, default **0.8** for creativity (0.5 on the review pass);
   `runStyleTurn(messages, tools, maxTokens, temperature)`, server clamps 0–1.5.
 - **Weather**: `services/weather.ts` (pure) fetches Open-Meteo current conditions +
@@ -244,11 +252,12 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
 
 ### Composition (`services/outfit-engine.ts`)
 - `scopeItems`/`SCOPE_CAPS`/`toStyleContext`/`toStyleCatalog`/`composeOutfitsWithLLM`
-  deleted. New `composeOutfitsAI(context, items, options)` runs the agent, validates with
-  `verifyAndRepairOutfits` (rules), and tops up with the deterministic engine when the agent
-  returns fewer than `count`. Returns `{ outfits, reply, turnsUsed }`.
-- `composeOutfits` / `generateOutfitsForToday` stay: builder lane + failure fallback (two
-  lanes: builder = instant rules, agent = "don't make me think").
+  deleted. New `composeOutfitsAI(context, items, options)` runs the agent and validates with
+  `verifyAndRepairOutfits` (rules), which also drops duplicate roles (never two pairs of
+  shoes) and caps at 6 pieces. It **never pads** — if the stylist returns one good look,
+  we surface one. Returns `{ outfits, reply, turnsUsed }`.
+- `composeOutfits` / `generateOutfitsForToday` remain for the manual **builder** lane only
+  (instant rules). They are never used to fill or rescue agent output.
 
 ### Daily looks + triggers (`state/use-daily-looks.ts`)
 - Cache key `daily_looks_v1:{date}:{aestheticId}:{count}` + djb2 wardrobe hash (id:revision);
@@ -257,7 +266,8 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   (deleted/edited styling-relevant field while referenced by cached looks, or ≥3 additions →
   regenerate) → else Clef `triageWardrobeDiff` (≥0.7 regenerate; KEEP extends the cache to
   the new hash). Explicit ↻ (`refresh()`) always busts.
-- Fallback: AI failure → keep cached looks, else `generateOutfitsForToday` + retry banner.
+- Fallback: AI failure → keep cached looks if present; otherwise surface an error. We never
+  substitute rules-engine output.
 - Styling-relevant fields: role/category/subcategory/colors/pattern/fit/sleeve/texture/
   formality/warmth/styleTags/statuses — name/brand/price/photo edits are cosmetic.
 

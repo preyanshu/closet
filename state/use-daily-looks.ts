@@ -1,7 +1,7 @@
 import type { Item, Outfit } from "@/data/mock";
 import { WardrobeApiError } from "@/services/api/wardrobe-api";
 import { triageWardrobeDiff, type WardrobeDiff } from "@/services/decision";
-import { composeOutfitsAI, generateOutfitsForToday, type OutfitContext } from "@/services/outfit-engine";
+import { composeOutfitsAI, type OutfitContext } from "@/services/outfit-engine";
 import { PREFERENCE_KEYS, readPreferenceValue, writePreference } from "@/services/storage/wardrobe-repository";
 import { useCloset } from "@/state/closet-context";
 import { useWeather } from "@/state/use-weather";
@@ -43,7 +43,6 @@ type CachedBatch = {
   itemHash: string;
   looks: Outfit[];
   generatedAt: string;
-  isFallback?: boolean;
 };
 
 function parseCached(value: string | null): CachedBatch | null {
@@ -116,8 +115,9 @@ function hardRuleDiff(prev: Item[], next: Item[], looks: Outfit[]): HardRuleResu
  * One agent session per day steady state: the batch is cached per date,
  * aesthetic, and count; wardrobe mutations are triaged (hard rules first,
  * then a Clef decision) so cosmetic changes do not burn a restyle session.
- * Explicit refresh always busts the cache. On AI failure the deterministic
- * engine covers the day with a retry banner.
+ * Explicit refresh always busts the cache. On AI failure we keep cached looks
+ * when present; otherwise we surface an error — we never substitute
+ * rules-engine output.
  */
 export function useDailyLooks(
   options: { aestheticId?: string; count?: number } = {},
@@ -149,12 +149,12 @@ export function useDailyLooks(
     const cacheKey = `${PREFERENCE_KEYS.dailyLooks}:${dateKey}:${aestheticId}:${count}:${weatherKey}`;
     const hash = wardrobeHash(items);
 
-    const persist = (looks: Outfit[], isFallback = false) => {
-      void writePreference(cacheKey, JSON.stringify({ dateKey, itemHash: hash, looks, generatedAt: new Date().toISOString(), isFallback } satisfies CachedBatch));
+    const persist = (looks: Outfit[]) => {
+      void writePreference(cacheKey, JSON.stringify({ dateKey, itemHash: hash, looks, generatedAt: new Date().toISOString() } satisfies CachedBatch));
     };
 
     const settleCache = (cached: CachedBatch) => {
-      persist(cached.looks, cached.isFallback);
+      persist(cached.looks);
       setState({ looks: cached.looks, status: "ready", refreshedAt: cached.generatedAt, fromCache: true });
       prevItemsRef.current = items;
       lastHashRef.current = hash;
@@ -172,7 +172,9 @@ export function useDailyLooks(
         if (active) setState({ looks: result.outfits, status: "ready", refreshedAt: new Date().toISOString(), fromCache: false });
       } catch (error) {
         const message = error instanceof WardrobeApiError ? error.message : "Something went wrong while styling. Try again.";
-        const fallback = cached && cached.looks.length > 0 ? cached.looks : generateOutfitsForToday(aestheticId, items);
+        // Keep previously generated looks if we have them; never substitute
+        // rules-engine output. Otherwise surface the error.
+        const fallback = cached && cached.looks.length > 0 ? cached.looks : [];
         if (active) {
           setState({
             looks: fallback,
@@ -182,7 +184,6 @@ export function useDailyLooks(
             fromCache: Boolean(cached),
           });
         }
-        if (fallback.length > 0 && !cached) persist(fallback, true);
       }
       prevItemsRef.current = items;
       lastHashRef.current = hash;
@@ -193,7 +194,7 @@ export function useDailyLooks(
       if (!active) return;
 
       // Fresh cache: show immediately (0 LLM calls).
-      if (cached && cached.looks.length > 0 && cached.itemHash === hash && !cached.isFallback) {
+      if (cached && cached.looks.length > 0 && cached.itemHash === hash) {
         setState({ looks: cached.looks, status: "ready", refreshedAt: cached.generatedAt, fromCache: true });
         prevItemsRef.current = items;
         lastHashRef.current = hash;
