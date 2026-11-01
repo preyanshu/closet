@@ -59,7 +59,7 @@ export default function ProfileScreen() {
           </View>
           <View style={{ flexDirection: "row", gap: 6 }}>
             {WEARER_PRESENTATIONS.map((option) => {
-              const active = (profile.presentation ?? "female") === option;
+              const active = (profile.presentation ?? "male") === option;
               return (
                 <Pressable
                   key={option}

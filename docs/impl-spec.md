@@ -207,7 +207,7 @@ cheap typed judgments.
   `runStyleTurn(messages, tools, maxTokens, temperature)`, server clamps 0–1.5.
 - **Wearer presentation**: read from profile metadata (`profile_metadata_v1`, `UserProfileMetadata`)
   and injected as `wearer_presentation` into both the stylist and reviewer prompts. Defaults to
-  `female` for testing; Profile → "Styled for" (Female / Male / Any) writes the preference, and
+  `male` for testing; Profile → "Styled for" (Female / Male / Any) writes the preference, and
   it is part of the daily cache key so changing it regenerates the day's looks.
 - **Weather**: `services/weather.ts` (pure) fetches Open-Meteo current conditions +
   precipitation chance; `state/use-weather.ts` resolves device location (expo-location, fails

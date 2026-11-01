@@ -44,7 +44,7 @@ export const WEARER_PRESENTATIONS = ["female", "male", "unspecified"] as const;
 export type WearerPresentation = (typeof WEARER_PRESENTATIONS)[number];
 
 /** Testing default until profile editing writes real metadata. */
-export const DEFAULT_WEARER_PRESENTATION: WearerPresentation = "female";
+export const DEFAULT_WEARER_PRESENTATION: WearerPresentation = "male";
 
 export type UserProfileMetadata = {
   presentation?: WearerPresentation;

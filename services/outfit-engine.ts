@@ -661,7 +661,7 @@ export type ComposeAIOptions = {
   history?: Array<{ role: string; content: string }>;
   /** Today's weather (already fetched) — the stylist styles to it. */
   weather?: WeatherSummary;
-  /** Wearer presentation from profile metadata; defaults to female for now. */
+  /** Wearer presentation from profile metadata; defaults to male for now. */
   presentation?: WearerPresentation;
   /** Sampling temperature for the stylist model (default 0.8; higher = more creative). */
   temperature?: number;
