@@ -1,11 +1,11 @@
 import type { Item, Outfit } from "@/data/mock";
 import { WardrobeApiError } from "@/services/api/wardrobe-api";
-import { triageWardrobeDiff, type WardrobeDiff } from "@/services/decision";
 import { composeOutfitsAI, type OutfitContext, type OutfitSuggestion } from "@/services/outfit-engine";
 import { PREFERENCE_KEYS, readPreferenceValue, writePreference } from "@/services/storage/wardrobe-repository";
 import { useCloset } from "@/state/closet-context";
 import { useWeather } from "@/state/use-weather";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AppState } from "react-native";
 
 type LooksStatus = "loading" | "ready" | "error";
 
@@ -15,12 +15,11 @@ export type DailyLooks = {
   error?: string;
   refreshedAt?: string;
   fromCache: boolean;
+  /** A user-initiated restyle is running; old looks stay visible. */
+  refreshing: boolean;
   /** Role-based hints when the wardrobe is too thin to style a full look. */
   suggestions: OutfitSuggestion[];
 };
-
-/** Debounce for wardrobe-mutation triage (batch rapid scans/imports). */
-const TRIAGE_DEBOUNCE_MS = 45_000;
 
 function toDateKey(date: Date = new Date()): string {
   const year = date.getFullYear();
@@ -29,97 +28,43 @@ function toDateKey(date: Date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
-/** Cheap signature of the wardrobe so a stale daily cache is regenerated. */
-function wardrobeHash(items: Item[]): string {
-  let hash = 5381;
-  for (const item of [...items].sort((a, b) => a.id.localeCompare(b.id))) {
-    for (const char of `${item.id}:${item.revision};`) {
-      hash = ((hash << 5) + hash + char.charCodeAt(0)) >>> 0;
-    }
-  }
-  return hash.toString(36);
-}
-
 type CachedBatch = {
+  /** Local day this batch was generated for. */
   dateKey: string;
-  itemHash: string;
   looks: Outfit[];
+  suggestions?: OutfitSuggestion[];
   generatedAt: string;
 };
+
+/** A shown look needs at least two pieces still in the current wardrobe. */
+function usableLooks(looks: Outfit[], items: Item[]): Outfit[] {
+  const ids = new Set(items.map((item) => item.id));
+  return looks.filter((look) => look.itemIds.filter((id) => ids.has(id)).length >= 2);
+}
 
 function parseCached(value: string | null): CachedBatch | null {
   if (!value) return null;
   try {
     const parsed = JSON.parse(value) as CachedBatch;
-    if (parsed && Array.isArray(parsed.looks)) return parsed;
+    if (parsed && Array.isArray(parsed.looks) && typeof parsed.dateKey === "string") return parsed;
   } catch {
     /* fall through */
   }
   return null;
 }
 
-/** Fields whose change affects styling; edits to anything else are cosmetic. */
-const STYLE_RELEVANT_FIELDS: (keyof Item)[] = [
-  "role", "category", "subcategory", "primaryColor", "secondaryColors",
-  "pattern", "fit", "sleeveLength", "visibleTexture", "formality",
-  "warmthBand", "styleTags", "lifecycleStatus", "availabilityStatus", "processingStatus",
-];
-
-type HardRuleResult = { regenerate: boolean; diff: WardrobeDiff | null };
-
 /**
- * Hard-rule triage: regenerate without Clef when cached looks are provably
- * broken (item deleted/edited while referenced) or a bulk import landed.
- */
-function hardRuleDiff(prev: Item[], next: Item[], looks: Outfit[]): HardRuleResult {
-  const prevById = new Map(prev.map((item) => [item.id, item]));
-  const nextById = new Map(next.map((item) => [item.id, item]));
-  const lookItemIds = new Set(looks.flatMap((look) => look.itemIds));
-
-  const deletedIds = prev.filter((item) => !nextById.has(item.id)).map((item) => item.id);
-  const deletedInLooks = deletedIds.filter((id) => lookItemIds.has(id));
-  if (deletedInLooks.length > 0) {
-    return { regenerate: true, diff: { kind: "deleted", itemIds: deletedInLooks } };
-  }
-
-  const editedPairs: { item: Item; fields: string[] }[] = [];
-  for (const item of next) {
-    const old = prevById.get(item.id);
-    if (!old) continue;
-    const fields = STYLE_RELEVANT_FIELDS
-      .filter((field) => JSON.stringify(old[field]) !== JSON.stringify(item[field]))
-      .map(String);
-    if (fields.length > 0) editedPairs.push({ item, fields });
-  }
-  const editedInLooks = editedPairs.filter((entry) => lookItemIds.has(entry.item.id));
-  if (editedInLooks.length > 0) {
-    return {
-      regenerate: true,
-      diff: { kind: "edited", items: editedInLooks.map((entry) => entry.item), changedFields: editedInLooks.map((entry) => entry.fields) },
-    };
-  }
-
-  const added = next.filter((item) => !prevById.has(item.id));
-  if (added.length >= 3) return { regenerate: true, diff: { kind: "added", items: added } };
-  if (added.length > 0) return { regenerate: false, diff: { kind: "added", items: added } };
-  if (deletedIds.length > 0) return { regenerate: false, diff: { kind: "deleted", itemIds: deletedIds } };
-  if (editedPairs.length > 0) {
-    return {
-      regenerate: false,
-      diff: { kind: "edited", items: editedPairs.map((entry) => entry.item), changedFields: editedPairs.map((entry) => entry.fields) },
-    };
-  }
-  return { regenerate: false, diff: null };
-}
-
-/**
- * Daily, agent-native look generation with cache + wardrobe-change triage.
- * One agent session per day steady state: the batch is cached per date,
- * aesthetic, and count; wardrobe mutations are triaged (hard rules first,
- * then a Clef decision) so cosmetic changes do not burn a restyle session.
- * Explicit refresh always busts the cache. On AI failure we keep cached looks
- * when present; otherwise we surface an error — we never substitute
- * rules-engine output.
+ * Daily, agent-native look generation with a stale-while-revalidate cache.
+ *
+ * - One generation per local day, per aesthetic/count/presentation.
+ * - The stored batch is shown immediately on every open (no loading state).
+ * - When the stored batch is from a previous day, a new run starts quietly in
+ *   the background while the old looks stay on screen.
+ * - Adding/editing wardrobe pieces does not regenerate today's looks; the next
+ *   day's background run picks up the changes.
+ * - Explicit ↻ (`refresh()`) forces a restyle; old looks stay visible.
+ * - On AI failure we keep cached looks and stay silent; with no looks at all we
+ *   surface the error. We never substitute rules-engine output.
  */
 export function useDailyLooks(
   options: { aestheticId?: string; count?: number } = {},
@@ -128,127 +73,140 @@ export function useDailyLooks(
   const { weather, status: weatherStatus } = useWeather();
   const aestheticId = options.aestheticId ?? "all";
   const count = options.count ?? 3;
-  const [state, setState] = useState<DailyLooks>({ looks: [], status: "loading", fromCache: false, suggestions: [] });
+  const [state, setState] = useState<DailyLooks>({ looks: [], status: "loading", fromCache: false, refreshing: false, suggestions: [] });
   const [nonce, setNonce] = useState(0);
-  const prevItemsRef = useRef<Item[] | null>(null);
-  const lastHashRef = useRef<string | null>(null);
+  const [foregroundTick, setForegroundTick] = useState(0);
+  const consumedNonceRef = useRef(0);
+  const generatingRef = useRef<string | null>(null);
+  const shownKeyRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // Re-check the day when the app comes back to the foreground (a session may
+  // stay open past midnight); same-day returns early with zero calls.
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (status) => {
+      if (status === "active") setForegroundTick((value) => value + 1);
+    });
+    return () => subscription.remove();
+  }, []);
 
   const context = useMemo<OutfitContext>(
     () => ({ occasion: "everyday", styleTags: aestheticId === "all" ? [] : [aestheticId], count }),
     [aestheticId, count],
   );
 
+  const presentation = profile.presentation;
+  const cacheKey = `${PREFERENCE_KEYS.dailyLooks}:${aestheticId}:${count}:${presentation ?? "unspecified"}`;
+  const visibleLooks = useMemo(() => usableLooks(state.looks, items), [state.looks, items]);
+
   useEffect(() => {
     if (!isHydrated) return;
-    // Wait for the weather lookup to settle (ready/denied/error) so we generate
-    // once — either styled to today's weather or plainly, never both.
-    if (weatherStatus === "idle" || weatherStatus === "loading") return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+
     const dateKey = toDateKey();
-    // Weather bucket in the key so a meaningful shift refreshes the day's looks.
-    const weatherKey = weather ? `${weather.seasonBand}-${Math.round(weather.tempC / 3) * 3}` : "na";
-    const cacheKey = `${PREFERENCE_KEYS.dailyLooks}:${dateKey}:${aestheticId}:${count}:${weatherKey}:${profile.presentation ?? "unspecified"}`;
-    const hash = wardrobeHash(items);
+    const runKeyBase = `${cacheKey}:${dateKey}`;
+    const force = nonce !== consumedNonceRef.current;
+    if (!force && shownKeyRef.current === runKeyBase) return;
 
-    const persist = (looks: Outfit[]) => {
-      void writePreference(cacheKey, JSON.stringify({ dateKey, itemHash: hash, looks, generatedAt: new Date().toISOString() } satisfies CachedBatch));
-    };
+    const runKey = `${runKeyBase}:${force ? nonce : "auto"}`;
+    if (generatingRef.current === runKey) return;
+    generatingRef.current = runKey;
 
-    const settleCache = (cached: CachedBatch) => {
-      persist(cached.looks);
-      setState({ looks: cached.looks, status: "ready", refreshedAt: cached.generatedAt, fromCache: true, suggestions: [] });
-      prevItemsRef.current = items;
-      lastHashRef.current = hash;
+    const show = (cached: CachedBatch, refreshing: boolean) => {
+      setState({
+        looks: cached.looks,
+        status: "ready",
+        refreshedAt: cached.generatedAt,
+        fromCache: true,
+        refreshing,
+        suggestions: cached.suggestions ?? [],
+      });
     };
 
     const generate = async (cached: CachedBatch | null) => {
-      setState((prev) => ({ ...prev, status: "loading" }));
+      if (force) consumedNonceRef.current = nonce;
+      if (cached?.looks.length) {
+        setState((prev) => ({ ...prev, refreshing: force, error: undefined }));
+      } else {
+        setState((prev) => ({ ...prev, status: "loading", refreshing: force, error: undefined }));
+      }
       try {
         const result = await composeOutfitsAI(context, items, {
           favoriteIds: [...favoriteIds],
           savedLooks,
           weather: weather ?? undefined,
-          presentation: profile.presentation,
+          presentation,
         });
-        persist(result.outfits);
-        if (active) setState({ looks: result.outfits, status: "ready", refreshedAt: new Date().toISOString(), fromCache: false, suggestions: result.suggestions ?? [] });
+        const generatedAt = new Date().toISOString();
+        const suggestions = result.suggestions ?? [];
+        void writePreference(cacheKey, JSON.stringify({ dateKey, looks: result.outfits, suggestions, generatedAt } satisfies CachedBatch));
+        if (mountedRef.current) {
+          shownKeyRef.current = runKeyBase;
+          setState({ looks: result.outfits, status: "ready", refreshedAt: generatedAt, fromCache: false, refreshing: false, suggestions });
+        }
       } catch (error) {
         const message = error instanceof WardrobeApiError ? error.message : "Something went wrong while styling. Try again.";
-        // Keep previously generated looks if we have them; never substitute
-        // rules-engine output. Otherwise surface the error.
-        const fallback = cached && cached.looks.length > 0 ? cached.looks : [];
-        if (active) {
+        const fallback = cached?.looks ?? [];
+        if (mountedRef.current) {
           setState({
             looks: fallback,
             status: fallback.length > 0 ? "ready" : "error",
-            error: message,
+            // Automatic background failures stay quiet (old looks remain);
+            // a manual restyle still reports the failure.
+            error: fallback.length > 0 && !force ? undefined : message,
             refreshedAt: new Date().toISOString(),
             fromCache: Boolean(cached),
-            suggestions: [],
+            refreshing: false,
+            suggestions: fallback.length > 0 ? cached?.suggestions ?? [] : [],
           });
         }
+      } finally {
+        if (generatingRef.current === runKey) generatingRef.current = null;
       }
-      prevItemsRef.current = items;
-      lastHashRef.current = hash;
     };
 
     const run = async () => {
       const cached = parseCached(await readPreferenceValue(cacheKey).catch(() => null));
-      if (!active) return;
-
-      // Fresh cache: show immediately (0 LLM calls).
-      if (cached && cached.looks.length > 0 && cached.itemHash === hash) {
-        setState({ looks: cached.looks, status: "ready", refreshedAt: cached.generatedAt, fromCache: true, suggestions: [] });
-        prevItemsRef.current = items;
-        lastHashRef.current = hash;
+      if (!mountedRef.current) {
+        if (generatingRef.current === runKey) generatingRef.current = null;
         return;
       }
 
-      const prev = prevItemsRef.current;
+      // A cache whose pieces were deleted is not usable; ignore it rather than
+      // rendering an empty "look". An empty batch is still valid (too few
+      // pieces → suggestions), so only discard caches with stale looks.
+      const cachedUsable = cached && (cached.looks.length === 0 || usableLooks(cached.looks, items).length > 0) ? cached : null;
 
-      // Wardrobe changed since the batch: triage before burning a session.
-      if (cached && cached.looks.length > 0 && prev && prev !== items) {
-        const hard = hardRuleDiff(prev, items, cached.looks);
-        if (!hard.regenerate && hard.diff) {
-          try {
-            const verdict = await triageWardrobeDiff(hard.diff, cached.looks, items);
-            if (!verdict.regenerate && active) {
-              // KEEP: extend the cache to the new hash; looks stay valid.
-              settleCache(cached);
-              return;
-            }
-          } catch {
-            /* triage unavailable: fall through and regenerate */
-          }
-        } else if (!hard.regenerate) {
-          // Hash changed but nothing meaningful did; trust the cache.
-          settleCache(cached);
+      if (cachedUsable) {
+        show(cachedUsable, force);
+        if (cachedUsable.dateKey === dateKey && !force) {
+          shownKeyRef.current = runKeyBase;
+          generatingRef.current = null;
           return;
         }
-        if (!active) return;
-        await generate(cached);
+        // Stale batch: keep it on screen and refresh quietly in the background,
+        // once the weather lookup has settled (it styles the new day).
+        if (weatherStatus === "idle" || weatherStatus === "loading") {
+          generatingRef.current = null;
+          return;
+        }
+      } else if (weatherStatus === "idle" || weatherStatus === "loading") {
+        // First-ever batch needs today's weather; keep the loading card until
+        // the soft weather timeout resolves (ready/denied/error all proceed).
+        generatingRef.current = null;
         return;
       }
 
-      await generate(cached);
+      await generate(cachedUsable);
     };
 
-    // Explicit refresh and first-load run immediately; mutation-driven
-    // regeneration is debounced so rapid scans batch into one session.
-    const isMutationDriven = nonce === 0 && lastHashRef.current !== null && lastHashRef.current !== hash;
-    if (isMutationDriven) {
-      timer = setTimeout(() => void run(), TRIAGE_DEBOUNCE_MS);
-    } else {
-      void run();
-    }
-
-    return () => {
-      active = false;
-      if (timer) clearTimeout(timer);
-    };
-  }, [isHydrated, items, context, nonce, aestheticId, count, favoriteIds, savedLooks, profile.presentation, weather, weatherStatus]);
+    void run();
+  }, [isHydrated, items, favoriteIds, savedLooks, profile.presentation, weather, weatherStatus, context, cacheKey, presentation, nonce, foregroundTick]);
 
   const refresh = () => setNonce((value) => value + 1);
-  return { ...state, refresh };
+  return { ...state, looks: visibleLooks, refresh };
 }

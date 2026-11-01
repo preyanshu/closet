@@ -62,10 +62,21 @@ export function ClosetProvider({ children }: PropsWithChildren) {
       .then((snapshot) => {
         if (!active) return;
         const nonDemo = snapshot.outfits.filter((outfit) => !outfit.isDemo);
+        const itemIds = new Set(snapshot.items.map((item) => item.id));
+        const resolvable = (outfit: Outfit) => outfit.itemIds.some((id) => itemIds.has(id));
+        // Drop looks whose pieces are all gone (left over after item deletion).
+        const stale = nonDemo.filter((outfit) => !resolvable(outfit));
+        for (const outfit of stale) void deleteOutfit(outfit.id);
+        const kept = nonDemo.filter(resolvable);
+        const keptRecommended = kept.filter((outfit) => outfit.source === "recommended");
+        const keptSavedIds = snapshot.savedLookIds.filter((id) => keptRecommended.some((outfit) => outfit.id === id));
         setItems(snapshot.items);
-        setMyLooks(nonDemo.filter((outfit) => outfit.source !== "recommended"));
-        setSavedLooks(nonDemo.filter((outfit) => outfit.source === "recommended"));
-        setSavedLookIds(new Set(snapshot.savedLookIds));
+        setMyLooks(kept.filter((outfit) => outfit.source !== "recommended"));
+        setSavedLooks(keptRecommended);
+        setSavedLookIds(new Set(keptSavedIds));
+        if (keptSavedIds.length !== snapshot.savedLookIds.length) {
+          void writePreference(PREFERENCE_KEYS.savedLooks, JSON.stringify(keptSavedIds));
+        }
         setFavoriteIds(new Set(snapshot.favoriteIds));
         setStylePreferencesState(snapshot.stylePreferences ?? []);
         setProfile(snapshot.profile);
@@ -91,9 +102,27 @@ export function ClosetProvider({ children }: PropsWithChildren) {
   }, []);
 
   const removeItem = useCallback((itemId: string) => {
-    setItems((prev) => prev.filter((item) => item.id !== itemId));
+    const nextItems = items.filter((item) => item.id !== itemId);
+    const itemIds = new Set(nextItems.map((item) => item.id));
+    const orphaned = (look: Outfit) => !look.itemIds.some((id) => itemIds.has(id));
+    const staleSaved = savedLooks.filter(orphaned);
+    const staleMine = myLooks.filter(orphaned);
+
+    setItems(nextItems);
+    setMyLooks(myLooks.filter((look) => !orphaned(look)));
+    setSavedLooks(savedLooks.filter((look) => !orphaned(look)));
+    for (const look of staleMine) void deleteOutfit(look.id);
+    if (staleSaved.length > 0) {
+      const nextIds = new Set(savedLookIds);
+      for (const look of staleSaved) {
+        nextIds.delete(look.id);
+        void deleteOutfit(look.id);
+      }
+      setSavedLookIds(nextIds);
+      void writePreference(PREFERENCE_KEYS.savedLooks, JSON.stringify([...nextIds]));
+    }
     void deleteItem(itemId);
-  }, []);
+  }, [items, savedLooks, myLooks, savedLookIds]);
 
   const logWear = useCallback((outfitId: string, itemIds: string[], localDate?: string) => {
     const now = new Date().toISOString();

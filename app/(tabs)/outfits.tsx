@@ -19,9 +19,13 @@ export default function OutfitsScreen() {
   const [pressedId, setPressedId] = useState<string | null>(null);
 
   const outfits = useMemo<LibraryOutfit[]>(() => {
-    const altaLooks = savedLooks.map((outfit) => ({ ...outfit, source: "saved" as const }));
-    return [...altaLooks, ...myLooks.map((outfit) => ({ ...outfit, source: "mine" as const }))];
-  }, [myLooks, savedLooks]);
+    // Never list a look whose pieces were all deleted (0-item cards/detail).
+    const ids = new Set(items.map((item) => item.id));
+    const resolvable = (outfit: Outfit) => outfit.itemIds.some((id) => ids.has(id));
+    const altaLooks = savedLooks.filter(resolvable).map((outfit) => ({ ...outfit, source: "saved" as const }));
+    const mine = myLooks.filter(resolvable).map((outfit) => ({ ...outfit, source: "mine" as const }));
+    return [...altaLooks, ...mine];
+  }, [items, myLooks, savedLooks]);
 
   const filteredOutfits = outfits.filter((outfit) => {
     if (filter === "All") return true;

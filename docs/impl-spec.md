@@ -208,11 +208,12 @@ cheap typed judgments.
 - **Wearer presentation**: read from profile metadata (`profile_metadata_v1`, `UserProfileMetadata`)
   and injected as `wearer_presentation` into both the stylist and reviewer prompts. Defaults to
   `male` for testing; Profile → "Styled for" (Female / Male / Any) writes the preference, and
-  it is part of the daily cache key so changing it regenerates the day's looks.
+  it is part of the daily cache key so changing it loads/generates that wearer's batch.
 - **Weather**: `services/weather.ts` (pure) fetches Open-Meteo current conditions +
   precipitation chance; `state/use-weather.ts` resolves device location (expo-location, fails
   soft) and caches 30 min. `describeWeather()` is injected as a `<weather>` line; season band
-  derives from feels-like temp; weather buckets the daily cache key.
+  derives from feels-like temp. Weather shapes the once-a-day run but is not a cache-key
+  component, so a mid-day weather change does not regenerate today's looks.
 - **Jev-gated self-critique**: after composing, one clef-flash call judges each complete
   ensemble for the occasion/weather; only a flagged look triggers a re-styling session (with
   Jev's critique as feedback). Default OFF in dev, ON in prod (`EXPO_PUBLIC_STYLIST_SELF_CRITIQUE`).
@@ -267,19 +268,30 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
 - `composeOutfits` / `generateOutfitsForToday` remain for the manual **builder** lane only
   (instant rules). They are never used to fill or rescue agent output.
 
-### Daily looks + triggers (`state/use-daily-looks.ts`)
-- Cache key `daily_looks_v1:{date}:{aestheticId}:{count}:{weatherBucket}` + djb2 wardrobe hash
-  (id:revision); all tabs read one batch; cache hit = 0 LLM calls.
-- **Wardrobe-change triage**: hash change → 45s debounce (batch rapid scans) → hard rules
-  (deleted/edited styling-relevant field while referenced by cached looks, or ≥3 additions →
-  regenerate) → else Clef `triageWardrobeDiff` (≥0.7 regenerate; KEEP extends the cache to
-  the new hash). Explicit ↻ (`refresh()`) always busts.
-- Fallback: AI failure → keep cached looks if present; otherwise surface an error. We never
-  substitute rules-engine output. **Too few pieces** is not an error: the hook returns
-  `ready` with zero looks + `suggestions`; Home shows "Not quite enough to style yet" with
+### Daily looks + cache (`state/use-daily-looks.ts`)
+- **One agent session per local day**, per aesthetic/count/presentation. The cache key is
+  `daily_looks_v1:{aestheticId}:{count}:{presentation}` and the stored record is
+  `{ dateKey, looks, suggestions, generatedAt }` — the day is a field, not part of the key, so
+  the same record survives midnight.
+- **Open → instant render**: read the stored batch and show it immediately (0 LLM calls, no
+  loading state). Same `dateKey` → stop. Older `dateKey` → keep the old looks on screen and
+  revalidate silently in the background, then swap in the new batch.
+- **Stale pieces are never rendered**: a look needs ≥2 pieces still in the wardrobe. Cached
+  looks that reference deleted items are filtered out (and an all-stale batch is regenerated
+  instead of showing an empty card).
+- **Wardrobe changes do not regenerate today's looks.** Scans/edits/additions are picked up by
+  the next day's background run; the old hash + triage path is gone. Weather changes are also
+  ignored mid-day.
+- First-ever run (no stored batch) waits for weather to settle and shows the one-time loading
+  card; afterwards the cache always has something to render.
+- Explicit ↻ (`refresh()`) forces a restyle; old looks stay visible and the small button spins.
+  AI failure with cached looks is silent for automatic runs and reported for manual ones; with
+  no looks it surfaces an error. We never substitute rules-engine output.
+- **Home cards are minimal**: a collage of the look's real pieces, its label/description, and a
+  single **Add to outfits** pill (tap again to remove). No like/share/"I wore this" row.
+- **Too few pieces** is a normal cached result: `ready` with zero looks + `suggestions`
+  (stored too, so it isn't recomputed all day); Home shows "Not quite enough to style yet" with
   add-to-closet hints, and chat folds the hints into its reply.
-- Styling-relevant fields: role/category/subcategory/colors/pattern/fit/sleeve/texture/
-  formality/warmth/styleTags/statuses — name/brand/price/photo edits are cosmetic.
 
 ### Chat lane (`app/chat.tsx`)
 - Typed `ChatMessage` (user/alta text + `outfits?` + error/narrow kinds); per-message agent
@@ -298,10 +310,12 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   wearCount/lastWorn bump (persisted). Callers: **Home Today deck** and **Plan past days**
   (placement rule: *propose anywhere, commit where the day lives* — never in chat).
 - Availability quick-actions on item detail (`available/laundry/packed/unavailable` →
-  `updateItem`); unavailable pieces are already excluded by `isEligible`. `removeItem` added
-  (feeds triage).
+  `updateItem`); unavailable pieces are already excluded by `isEligible`. `removeItem` added.
 
 ### Saved-look unification
+- **Orphan looks are pruned**: a saved/custom look whose pieces have all been deleted is removed
+  from the library on hydration and on item deletion (its `saved_look_ids` entry and DB row are
+  cleaned up). The Outfits screen also filters defensively, so a 0-piece look can never render.
 - `savedLooks: Outfit[]` on context (hydrated from outfits with `source: "recommended"`);
   `toggleSavedLook(outfitId, outfit?)` persists the full outfit on save (so surviving new
   daily batches). outfits/calendar/saved-looks/look-detail/plan read context `savedLooks` —
@@ -316,8 +330,10 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   `texture` (choices from bounded sets), `formality`, `warmth` (score questions on the ordered
   scale `["1".."5"]`, banded to casual/smart-casual/formal and light/medium/heavy).
 - **Presence gate (cost saver)**: `detectItemPresence()` asks one cheap image question first.
-  If no clothing/accessory is visible it returns **"No item detected"** and skips Flux staging
-  + extraction entirely; it fails open, so a flaky gate never blocks a real scan.
+  If no clothing/accessory is visible it skips Flux staging + extraction and keeps the photo as
+  a manual draft whose review card says **"No item detected"** — the user can still fill in
+  details and save it (a wrong "no" never traps them). It fails open, so a flaky gate never
+  blocks a real scan.
 - The subcategory drives `category`, `role` (dresses/jumpsuits → `one_piece`, bags → `bag`, …)
   and the name, so extraction stays coherent across garment types.
 - **Detection → staging (sequential)**: extraction runs first, then its
@@ -325,9 +341,16 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   exact subject and treats everything else (bedsheets, bedding, tables, background fabric) as
   removable background, and zooms in when the item is small in frame. This fixes staging that
   previously kept the bedsheet along with a small item.
+- **Staging is best-effort**: if image cleanup fails, the detected attributes/name are kept, the
+  original photo is used, and the review sheet shows a quiet "image cleanup couldn't run" note
+  instead of an error. The piece stays fully savable.
 - Every answer carries `confidence` + `probabilities`. `AUTO_CONFIRM_THRESHOLD = 0.85` →
-  `AiAttribute.reviewStatus: "confirmed"`; below → `"suggested"` (tap-to-confirm chips in the
-  scan ReviewSheet with confidence %). User edits flip the row to `source: "user"`.
+  `AiAttribute.reviewStatus: "confirmed"`; below → `"suggested"`. The scan ReviewSheet surfaces
+  these in a structured **Detected details** card near the top: one row per attribute (Type,
+  Fit, Sleeve, Pattern, Fabric, Occasion, Warmth) with a confirmed checkmark or a qualitative
+  "Check" marker (no raw percentages). Tapping a row expands inline choices to correct the
+  value; picking one (or "Looks right") confirms it. Category/color keep their dedicated
+  editors. User edits flip the row to `source: "user"`.
 - **Deterministic name template** (`Black leather sneaker`, `Cream knit polo`) — the model
   never writes names.
 - `Item.aiAttributes` now actually populated (`toAiAttributes`, modelVersion `clef-flash`);

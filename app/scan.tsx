@@ -60,17 +60,57 @@ type PendingItem = {
   confirmedFields: string[];
 };
 
-const DETAIL_FIELD_LABELS: Record<string, string> = {
+type DetailKey = "subcategory" | "fit" | "sleeve_length" | "pattern" | "material" | "formality" | "warmth";
+
+const DETAIL_FIELD_LABELS: Record<DetailKey, string> = {
+  subcategory: "Type",
   fit: "Fit",
   sleeve_length: "Sleeve",
   pattern: "Pattern",
-  texture: "Texture",
-  formality: "Formality",
+  material: "Fabric",
+  formality: "Occasion",
   warmth: "Warmth",
-  category: "Category",
-  subcategory: "Type",
-  primary_color: "Color",
 };
+
+const DETAIL_FIELD_OPTIONS: Partial<Record<DetailKey, string[]>> = {
+  fit: ["slim", "regular", "relaxed", "oversized", "wide"],
+  sleeve_length: ["sleeveless", "short", "three-quarter", "long"],
+  pattern: ["solid", "striped", "plaid", "floral", "graphic", "other"],
+  material: ["smooth", "knit", "denim", "woven", "fleece", "leather-like", "satin-like"],
+  formality: ["casual", "smart-casual", "formal"],
+  warmth: ["light", "medium", "heavy"],
+};
+
+const DETAIL_VALUE_LABELS: Record<string, string> = {
+  "leather-like": "Leather",
+  "satin-like": "Satin",
+  "t-shirt": "T-shirt",
+  "three-quarter": "3/4 sleeve",
+  "smart-casual": "Smart casual",
+};
+
+function detailText(value: string | undefined) {
+  if (!value) return "";
+  return DETAIL_VALUE_LABELS[value] ?? beautify(value);
+}
+
+/** The extraction question for fabric is named "texture" (confidence key). */
+function confirmKey(field: DetailKey) {
+  return field === "material" ? "texture" : field;
+}
+
+/** Which detected details are meaningful for this category. */
+function visibleDetailRows(attrs: GarmentAttributes): DetailKey[] {
+  const rows: DetailKey[] = [];
+  if (attrs.subcategory) rows.push("subcategory");
+  if ((attrs.category === "top" || attrs.category === "bottom" || attrs.category === "outerwear") && attrs.fit) rows.push("fit");
+  if ((attrs.category === "top" || attrs.category === "outerwear") && attrs.sleeve_length) rows.push("sleeve_length");
+  if (attrs.pattern) rows.push("pattern");
+  if (attrs.material) rows.push("material");
+  if (attrs.formality) rows.push("formality");
+  if (attrs.warmth) rows.push("warmth");
+  return rows;
+}
 
 const categoryShortLabels: Record<ClothingCategory, string> = {
   top: "Tops",
@@ -112,7 +152,6 @@ export default function ScanModal() {
   const [draft, setDraft] = useState<PendingItem | null>(null);
   const [batchReview, setBatchReview] = useState(false);
   const [saveComplete, setSaveComplete] = useState(false);
-
   useEffect(() => {
     // iOS waits for the native review sheet's onDismiss before closing its parent.
     if (saveComplete && process.env.EXPO_OS !== "ios") dismissModal();
@@ -150,12 +189,17 @@ export default function ScanModal() {
       // Cheap Clef gate: skip Flux staging + vision extraction for non-items.
       const presence = await detectItemPresence(uri).catch(() => ({ present: true, confidence: 0 }));
       if (!presence.present) {
+        // A wrong "no" shouldn't trap the user: keep a manual draft that can
+        // still be reviewed and saved without detection or staging.
         updatePending(id, (it) => ({
           ...it,
-          status: "error" as ItemStatus,
-          name: "No item detected",
-          error: "No clothing or accessory item is visible in this photo. Retake it with the piece clearly in frame.",
-          progress: 0,
+          status: "ready" as ItemStatus,
+          name: "New piece",
+          cleanUri: null,
+          error: "No item detected. Add the details manually, or retake the photo.",
+          attrs: null,
+          confirmedFields: [],
+          progress: 100,
         }));
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
         return;
@@ -165,40 +209,52 @@ export default function ScanModal() {
       // Identify first, then stage: the extraction result tells Flux exactly
       // which item to isolate so background fabric (bedsheets, etc.) is dropped.
       const detected = await detectGarment(uri);
+      const confirmedFields = Object.entries(detected.confidences)
+        .filter(([, confidence]) => confidence >= AUTO_CONFIRM_THRESHOLD)
+        .map(([field]) => field);
       updatePending(id, (it) => ({
         ...it,
         name: detected.name,
         category: detected.category,
         color: detected.primary_color,
+        attrs: detected,
+        confirmedFields,
         progress: 45,
       }));
 
-      const staged = await stageGarment(uri, {
-        name: detected.name,
-        subcategory: detected.subcategory,
-        category: detected.category,
-        primaryColor: detected.primary_color,
-        material: detected.material,
-      });
-      updatePending(id, (it) => ({ ...it, cleanUri: staged.cleanUri, progress: 90 }));
+      // Staging is best-effort: if image cleanup fails, keep the detected
+      // details and save the original photo instead of blocking the piece.
+      let cleanUri: string | null = null;
+      let cleaningFailed = false;
+      try {
+        const staged = await stageGarment(uri, {
+          name: detected.name,
+          subcategory: detected.subcategory,
+          category: detected.category,
+          primaryColor: detected.primary_color,
+          material: detected.material,
+        });
+        cleanUri = staged.cleanUri;
+      } catch {
+        cleaningFailed = true;
+      }
+      updatePending(id, (it) => ({ ...it, cleanUri, progress: 90 }));
 
       updatePending(id, (it) => ({
         ...it,
         status: "ready" as ItemStatus,
-        cleanUri: staged.cleanUri,
+        cleanUri,
         name: detected.name,
         category: detected.category,
         color: detected.primary_color,
         price: null,
         aesthetics: suggestAesthetics(detected),
         attrs: detected,
-        confirmedFields: Object.entries(detected.confidences)
-          .filter(([, confidence]) => confidence >= AUTO_CONFIRM_THRESHOLD)
-          .map(([field]) => field),
+        confirmedFields,
         progress: 100,
-        error: null,
+        error: cleaningFailed ? "Image cleanup couldn't run, so we kept your original photo. You can save this piece as-is." : null,
       }));
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Haptics.notificationAsync(cleaningFailed ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Success);
     } catch (e: any) {
       updatePending(id, (it) => ({
         ...it,
@@ -706,6 +762,7 @@ function CaptureTray({
 function TrayCard({ item, width, onPress, onRemove }: { item: PendingItem; width: number; onPress: () => void; onRemove: (event: any) => void }) {
   const processing = item.status === "processing";
   const errored = item.status === "error";
+  const warned = !errored && Boolean(item.error);
   const [pressed, setPressed] = useState(false);
   return (
     <View style={{ width }}>
@@ -733,8 +790,8 @@ function TrayCard({ item, width, onPress, onRemove }: { item: PendingItem; width
             </View>
           ) : null}
 
-          {errored ? (
-            <View style={{ position: "absolute", top: 7, left: 7, width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: "#D32F2F" }}>
+          {errored || warned ? (
+            <View style={{ position: "absolute", top: 7, left: 7, width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: errored ? "#D32F2F" : adaptiveColors.warning }}>
               <WardrobeIcon name="exclamationmark" color={adaptiveColors.onAccent} weight="bold" size={10} />
             </View>
           ) : null}
@@ -772,9 +829,12 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [selectedAesthetics, setSelectedAesthetics] = useState(item.aesthetics);
   const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set(item.confirmedFields));
+  const [attrs, setAttrs] = useState<GarmentAttributes | null>(item.attrs);
+  const [expandedDetail, setExpandedDetail] = useState<DetailKey | null>(null);
   const [error, setError] = useState("");
   const previewSource = resolveStagedSource(item.cleanUri) ?? { uri: item.originalUri };
-  const suggestedFields = (item.attrs?.suggestedFields ?? []).filter((field) => DETAIL_FIELD_LABELS[field]);
+  const detailRows = attrs ? visibleDetailRows(attrs) : [];
+  const needsCheck = detailRows.filter((field) => !confirmed.has(confirmKey(field))).length;
   const save = () => {
     const amount = price.trim() === "" ? null : Number(price.replace(",", "."));
     if (!name.trim()) { setError("Enter a name for this piece."); return; }
@@ -787,6 +847,7 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
       category,
       color,
       aesthetics: selectedAesthetics,
+      attrs: attrs ?? item.attrs,
       confirmedFields: [...new Set([...confirmed, "category", "primary_color"])],
       error: null,
       progress: 100,
@@ -800,10 +861,122 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
         <View style={{ height: 200, borderRadius: 20, borderCurve: "continuous", overflow: "hidden", backgroundColor: adaptiveColors.surfaceMuted, borderWidth: 1, borderColor: adaptiveColors.border }}>
           <Image source={previewSource} accessibilityLabel="Scanned piece" contentFit="contain" style={{ width: "100%", height: "100%" }} />
         </View>
-        {item.status === "error" ? <View style={{ gap: 8 }}>
-          <Text style={{ fontSize: 14, color: adaptiveColors.destructive }}>The photo couldn’t be processed. You can edit the details or try again.</Text>
-          <Pressable accessibilityRole="button" onPress={() => onRetry(item.id)} style={{ minHeight: 44, justifyContent: "center" }}><Text style={{ color: adaptiveColors.accent, fontWeight: "600" }}>Analyze again</Text></Pressable>
-        </View> : null}
+        {item.error ? (
+          <View style={{
+            gap: 8,
+            padding: 14,
+            borderRadius: 16,
+            borderCurve: "continuous",
+            borderWidth: 1,
+            backgroundColor: item.status === "error" ? "#FBEDEA" : adaptiveColors.accentSoft,
+            borderColor: item.status === "error" ? "#EED3CD" : adaptiveColors.border,
+          }}>
+            <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
+              <WardrobeIcon name={item.status === "error" ? "exclamationmark.triangle" : "sparkles"} color={item.status === "error" ? adaptiveColors.destructive : adaptiveColors.warning} size={16} />
+              <Text style={{ flex: 1, fontSize: 13, lineHeight: 18, color: item.status === "error" ? adaptiveColors.destructive : adaptiveColors.secondaryLabel }}>
+                {item.error}
+              </Text>
+            </View>
+            <Pressable accessibilityRole="button" onPress={() => onRetry(item.id)} style={{ minHeight: 40, justifyContent: "center", alignSelf: "flex-start" }}>
+              <Text style={{ color: adaptiveColors.accent, fontWeight: "600", fontSize: 13 }}>{item.status === "error" ? "Analyze again" : "Try again"}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {attrs && detailRows.length > 0 ? (
+          <View style={{ borderRadius: 20, borderCurve: "continuous", borderWidth: 1, borderColor: adaptiveColors.border, backgroundColor: adaptiveColors.surface, overflow: "hidden" }}>
+            <View style={{ padding: 16, gap: 4 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Text style={{ flex: 1, fontSize: 15, fontWeight: "700", color: adaptiveColors.label }}>Detected details</Text>
+                {needsCheck > 0 ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 4, paddingHorizontal: 9, borderRadius: radius.pill, backgroundColor: adaptiveColors.canvas }}>
+                    <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: adaptiveColors.warning }} />
+                    <Text style={{ fontSize: 11, fontWeight: "700", color: adaptiveColors.warning, fontVariant: ["tabular-nums"] }}>{needsCheck} to check</Text>
+                  </View>
+                ) : (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 4, paddingHorizontal: 9, borderRadius: radius.pill, backgroundColor: adaptiveColors.accentSoft }}>
+                    <WardrobeIcon name="checkmark.circle.fill" color={adaptiveColors.accent} size={13} />
+                    <Text style={{ fontSize: 11, fontWeight: "700", color: adaptiveColors.accent }}>All set</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={{ fontSize: 13, lineHeight: 18, color: adaptiveColors.secondaryLabel }}>
+                {needsCheck > 0 ? "Confirm what Alta found, or tap a row to adjust it." : "Tap any row if something looks off."}
+              </Text>
+            </View>
+            {detailRows.map((field) => {
+              if (!attrs) return null;
+              const value = field === "material" ? attrs.material : String(attrs[field as keyof GarmentAttributes] ?? "");
+              const isConfirmed = confirmed.has(confirmKey(field));
+              const isOpen = expandedDetail === field;
+              const options = DETAIL_FIELD_OPTIONS[field];
+              return (
+                <View key={field}>
+                  <View style={{ height: 1, marginLeft: 16, backgroundColor: adaptiveColors.separator }} />
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: isOpen }}
+                    accessibilityLabel={`${DETAIL_FIELD_LABELS[field]}: ${detailText(value)}${isConfirmed ? ", confirmed" : ", needs a check"}`}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      if (!options) {
+                        setConfirmed((prev) => new Set(prev).add(confirmKey(field)));
+                        return;
+                      }
+                      setExpandedDetail((prev) => (prev === field ? null : field));
+                    }}
+                    style={{ minHeight: 56, paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 12 }}
+                  >
+                    <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                      <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{DETAIL_FIELD_LABELS[field]}</Text>
+                      <Text numberOfLines={1} style={{ fontSize: 15, fontWeight: "600", color: adaptiveColors.label }}>{detailText(value)}</Text>
+                    </View>
+                    {isConfirmed ? (
+                      <WardrobeIcon name="checkmark.circle.fill" color={adaptiveColors.accent} size={18} />
+                    ) : (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: adaptiveColors.warning }} />
+                        <Text style={{ fontSize: 12, fontWeight: "700", color: adaptiveColors.warning }}>Check</Text>
+                      </View>
+                    )}
+                    {options ? <WardrobeIcon name={isOpen ? "chevron.up" : "chevron.down"} color={adaptiveColors.tertiaryLabel} size={13} /> : null}
+                  </Pressable>
+                  {isOpen && options ? (
+                    <View style={{ paddingHorizontal: 16, paddingBottom: 14, gap: 10 }}>
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                        {options.map((option) => (
+                          <ReviewChoice
+                            key={option}
+                            label={detailText(option)}
+                            selected={value === option}
+                            onPress={() => {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                              setAttrs((prev) => (prev ? ({ ...prev, [field]: option } as GarmentAttributes) : prev));
+                              setConfirmed((prev) => new Set(prev).add(confirmKey(field)));
+                              setExpandedDetail(null);
+                            }}
+                          />
+                        ))}
+                      </View>
+                      {!isConfirmed ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setConfirmed((prev) => new Set(prev).add(confirmKey(field)));
+                            setExpandedDetail(null);
+                          }}
+                          style={{ alignSelf: "flex-start", minHeight: 40, justifyContent: "center" }}
+                        >
+                          <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.accent }}>Looks right</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
         <ReviewField label="Name">
           <TextInput accessibilityLabel="Item name" value={name} onChangeText={setName} placeholder="Name your piece" placeholderTextColor={adaptiveColors.tertiaryLabel} style={reviewInputStyle} returnKeyType="done" />
         </ReviewField>
@@ -829,61 +1002,6 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
             {aestheticOptions.map((option) => <ReviewChoice key={option} label={beautify(option)} selected={selectedAesthetics.includes(option)} onPress={() => setSelectedAesthetics((prev) => prev.includes(option) ? prev.filter((id) => id !== option) : [...prev, option])} />)}
           </View>
         </ReviewField>
-        {suggestedFields.length > 0 ? (
-          <ReviewField label="Check these details">
-            <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>
-              Alta was less sure about these — tap to confirm, or edit above and save.
-            </Text>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {suggestedFields.map((field) => {
-                const attrs = item.attrs!;
-                const value = field === "texture" ? attrs.material
-                  : field === "primary_color" ? attrs.primary_color
-                    : String(attrs[field as keyof GarmentAttributes] ?? "");
-                if (!value) return null;
-                const isConfirmed = confirmed.has(field);
-                const confidence = Math.round((attrs.confidences[field] ?? 0) * 100);
-                return (
-                  <Pressable
-                    key={field}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: isConfirmed }}
-                    accessibilityLabel={`Confirm ${DETAIL_FIELD_LABELS[field]}: ${value}`}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setConfirmed((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(field)) next.delete(field);
-                        else next.add(field);
-                        return next;
-                      });
-                    }}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 6,
-                      minHeight: 44,
-                      paddingVertical: 10,
-                      paddingHorizontal: 13,
-                      borderRadius: radius.pill,
-                      borderWidth: 1,
-                      borderColor: isConfirmed ? adaptiveColors.accent : adaptiveColors.border,
-                      backgroundColor: isConfirmed ? adaptiveColors.accentSoft : adaptiveColors.surface,
-                    }}
-                  >
-                    {isConfirmed ? <WardrobeIcon name="checkmark.circle.fill" color={adaptiveColors.accent} size={15} /> : <WardrobeIcon name="questionmark.circle" color={adaptiveColors.tertiaryLabel} size={15} />}
-                    <Text style={{ fontSize: 13, fontWeight: "600", color: isConfirmed ? adaptiveColors.accent : adaptiveColors.secondaryLabel }}>
-                      {DETAIL_FIELD_LABELS[field]}: {beautify(value)}
-                    </Text>
-                    <Text style={{ fontSize: 11, fontWeight: "700", color: isConfirmed ? adaptiveColors.accent : adaptiveColors.tertiaryLabel, fontVariant: ["tabular-nums"] }}>
-                      {confidence}%
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </ReviewField>
-        ) : null}
       </ScrollView>
       <View style={{ flexShrink: 0, padding: 20, gap: 12, borderTopWidth: 1, borderTopColor: adaptiveColors.separator, backgroundColor: adaptiveColors.canvas }}>
         {error ? <Text accessibilityLiveRegion="polite" style={{ color: adaptiveColors.destructive, fontSize: 13 }}>{error}</Text> : null}
