@@ -1,4 +1,4 @@
-import { clothingItems, type Item, type Outfit } from "@/data/mock";
+import { type Item, type Outfit } from "@/data/mock";
 import { WardrobeApiError } from "@/services/api/wardrobe-api";
 import { runStylistAgent, critiqueOutfits, type RawStyleOutfit, type StylistWardrobe } from "@/services/stylist-agent";
 import { judgeOccasionFit } from "@/services/decision";
@@ -488,7 +488,7 @@ function toOutfit(items: Item[], context: OutfitContext, personality: OutfitPers
 }
 
 /** Compose up to `context.count` ranked, diversified outfits. Deterministic. */
-export function composeOutfits(context: OutfitContext = {}, items: Item[] = clothingItems): Outfit[] {
+export function composeOutfits(context: OutfitContext, items: Item[]): Outfit[] {
   const count = Math.max(0, context.count ?? 2);
   const pool = items.filter(isEligible);
   if (pool.length === 0 || count === 0) return [];
@@ -510,7 +510,7 @@ export function composeOutfits(context: OutfitContext = {}, items: Item[] = clot
  * Backwards-compatible entry point used by the home / outfits / plan / calendar
  * screens. `aestheticId` is treated as a style-tag preference.
  */
-export function generateOutfitsForToday(aestheticId = "all", sourceItems: Item[] = clothingItems): Outfit[] {
+export function generateOutfitsForToday(aestheticId: string, sourceItems: Item[]): Outfit[] {
   const styleTags = aestheticId === "all" ? [] : [aestheticId];
   const filtered = styleTags.length > 0 ? sourceItems.filter((item) => item.styleTags.some((tag) => styleTags.includes(tag))) : sourceItems;
   const pool = filtered.length >= 6 ? filtered : sourceItems;
@@ -599,11 +599,54 @@ export function verifyAndRepairOutfits(raw: RawStyleOutfit[], wardrobe: Item[], 
   return result;
 }
 
+export type OutfitSuggestion = {
+  role: ItemRole;
+  label: string;
+  hint: string;
+};
+
 export type ComposeAIResult = {
   outfits: Outfit[];
   reply?: string;
   turnsUsed?: number;
+  /** Present when the wardrobe can't cover the required slots for a full look. */
+  suggestions?: OutfitSuggestion[];
 };
+
+const SUGGESTION_COPY: Partial<Record<ItemRole, { label: string; hint: string }>> = {
+  base_top: { label: "A top", hint: "a shirt, blouse, tee, or knit" },
+  bottom: { label: "A bottom", hint: "trousers, jeans, or a skirt" },
+  one_piece: { label: "A one-piece", hint: "a dress or jumpsuit" },
+  footwear: { label: "Shoes", hint: "sneakers, loafers, or heels" },
+};
+
+/**
+ * What the wardrobe is missing before a full look can be built: a top (or
+ * one-piece), a bottom, and shoes.
+ */
+export function suggestWardrobeAdditions(items: Item[]): OutfitSuggestion[] {
+  const pool = items.filter(isEligible);
+  const roles = new Set(pool.map((item) => item.role));
+  const hasOnePiece = roles.has("one_piece");
+  const hasTop = roles.has("base_top");
+  const hasBottom = roles.has("bottom");
+
+  const suggestions: OutfitSuggestion[] = [];
+  if (!hasOnePiece) {
+    if (!hasTop) suggestions.push({ role: "base_top", ...SUGGESTION_COPY.base_top! });
+    if (!hasBottom) suggestions.push({ role: "bottom", ...SUGGESTION_COPY.bottom! });
+  }
+  if (!roles.has("footwear")) suggestions.push({ role: "footwear", ...SUGGESTION_COPY.footwear! });
+  return suggestions;
+}
+
+/** True when the eligible pieces cover a top/one-piece, a bottom, and shoes. */
+export function canComposeOutfit(items: Item[]): boolean {
+  const pool = items.filter(isEligible);
+  const roles = new Set(pool.map((item) => item.role));
+  const core = roles.has("one_piece") || (roles.has("base_top") && roles.has("bottom"));
+  return core && roles.has("footwear");
+}
 
 export type ComposeAIOptions = {
   /** Ids the user has hearted; biases the agent toward proven taste. */
@@ -644,12 +687,22 @@ function resolveSelfCritique(explicit: boolean | undefined): boolean {
  * Never pads: if the stylist returns one good look, we surface one.
  */
 export async function composeOutfitsAI(
-  context: OutfitContext = {},
-  items: Item[] = clothingItems,
+  context: OutfitContext,
+  items: Item[],
   options: ComposeAIOptions = {},
 ): Promise<ComposeAIResult> {
+  // A full look needs a top (or one-piece), a bottom, and shoes. When the
+  // wardrobe can't cover those slots, say what to add instead of spending a
+  // model call on an impossible request.
+  if (!canComposeOutfit(items)) {
+    return {
+      outfits: [],
+      suggestions: suggestWardrobeAdditions(items),
+      reply: "I need a few more pieces before I can pull a whole look together.",
+    };
+  }
+
   const pool = items.filter(isEligible);
-  if (pool.length < 6) throw new WardrobeApiError("Not enough wearable pieces to style a look.");
 
   // The model decides how many looks are actually good (up to 5); we never pad
   // toward a fixed target — one great look beats three mediocre ones.

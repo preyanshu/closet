@@ -16,6 +16,7 @@ import {
   Pressable,
   KeyboardAvoidingView,
   Platform,
+  type ScrollViewInstance,
 } from "react-native";
 
 type ChatMessage = {
@@ -42,6 +43,16 @@ const quickReplies = ["Dinner out", "Date night", "Casual hangout", "Work event"
 const TRIVIAL_REPLY =
   "I'm all about outfits — tell me where you're headed and how dressy you want to be, and I'll pull looks straight from your closet.";
 
+/** Fold "add these pieces" hints into the chat reply when no look is possible. */
+function withSuggestions(
+  reply: string | undefined,
+  suggestions: Array<{ label: string; hint: string }> | undefined,
+): string | undefined {
+  if (!suggestions?.length) return reply;
+  const list = suggestions.map((s) => `${s.label.toLowerCase()} (${s.hint})`).join(", ");
+  return `${reply ?? "I need a few more pieces before I can build a full look."}\n\nAdd ${list} and I'll style it.`;
+}
+
 export default function ChatScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState("");
@@ -49,7 +60,7 @@ export default function ChatScreen() {
   const [rejected, setRejected] = useState<string[]>([]);
   const rejectedRef = useRef<Array<{ label: string; itemIds: string[] }>>([]);
   const retryCountRef = useRef(0);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const { items, favoriteIds, savedLooks, toggleSavedLook } = useCloset();
   const { weather } = useWeather();
 
@@ -117,7 +128,7 @@ export default function ChatScreen() {
         {
           id: `${Date.now()}-a`,
           role: "alta",
-          text: result.reply ?? "Here's what I'd pull from your closet.",
+          text: withSuggestions(result.reply, result.suggestions) ?? "Here's what I'd pull from your closet.",
           outfits: result.outfits,
           originalPrompt: body,
         },
@@ -196,7 +207,7 @@ export default function ChatScreen() {
         {
           id: `${Date.now()}-a`,
           role: "alta",
-          text: result.reply ?? "Fair — try these instead.",
+          text: withSuggestions(result.reply, result.suggestions) ?? "Fair — try these instead.",
           outfits: result.outfits,
           originalPrompt,
         },

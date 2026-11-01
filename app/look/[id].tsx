@@ -1,5 +1,5 @@
 import { adaptiveColors, radius, Card, ModalHeader } from "@/components/ui";
-import { categoryLabels, mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
+import { categoryLabels, type Item, type Outfit } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
 import { roleLabels } from "@/types/taxonomy";
 import type { ItemRole } from "@/types/domain";
@@ -8,7 +8,7 @@ import { itemImageSource } from "@/services/item-image";
 import { useLocalSearchParams } from "expo-router";
 import { ScrollView, Text, View } from "react-native";
 
-type DetailOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" | "mock" };
+type DetailOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" };
 
 type LookItemRef = { itemId: string; role?: ItemRole; layerOrder?: number };
 
@@ -18,8 +18,7 @@ export default function LookDetailScreen() {
 
   const savedLooksOut: DetailOutfit[] = savedLooks.map((outfit) => ({ ...outfit, source: "saved" }));
   const customLooks: DetailOutfit[] = myLooks.map((outfit) => ({ ...outfit, source: "mine" }));
-  const demoLooks: DetailOutfit[] = mockOutfitAlbums.map((outfit) => ({ ...outfit, source: "mock" }));
-  const outfit = [...savedLooksOut, ...customLooks, ...demoLooks].find((look) => look.id === id);
+  const outfit = [...savedLooksOut, ...customLooks].find((look) => look.id === id);
   const outfitItems = resolveOutfitItems(outfit, items);
 
   if (!outfit) {
@@ -30,7 +29,7 @@ export default function LookDetailScreen() {
     );
   }
 
-  const sourceLabel = outfit.source === "mine" ? "Custom" : outfit.source === "mock" ? "Demo" : "Saved";
+  const sourceLabel = outfit.source === "mine" ? "Custom" : "Saved";
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: adaptiveColors.canvas }} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ gap: 24, paddingHorizontal: 24, paddingBottom: 88, paddingTop: 20 }}>

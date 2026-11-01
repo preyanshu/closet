@@ -18,6 +18,21 @@ function endpoint(path: string): string {
   return `${API_BASE_URL}${path}`;
 }
 
+type FetchInit = NonNullable<Parameters<typeof expoFetch>[1]>;
+type FetchResponse = Awaited<ReturnType<typeof expoFetch>>;
+
+/** Fetch with a diagnosable error: surface the URL and the underlying reason. */
+async function post(path: string, init: FetchInit): Promise<FetchResponse> {
+  try {
+    return await expoFetch(endpoint(path), init);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "network error";
+    throw new WardrobeApiError(
+      `Can't reach the wardrobe API at ${API_BASE_URL || "(unset)"} — ${reason}. Check EXPO_PUBLIC_WARDROBE_API_URL and that the worker is running.`,
+    );
+  }
+}
+
 function parseJson(text: string): Record<string, unknown> {
   try {
     return JSON.parse(text) as Record<string, unknown>;
@@ -30,7 +45,7 @@ export async function requestDetection(form: FormData): Promise<string> {
   if (!isWardrobeApiConfigured()) {
     throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
   }
-  const response = await expoFetch(endpoint("/v1/detect"), { method: "POST", body: form });
+  const response = await post("/v1/detect", { method: "POST", body: form });
   const text = await response.text();
   if (response.status !== 200) {
     throw new WardrobeApiError(`Garment detection failed (${response.status}): ${text.slice(0, 200)}`);
@@ -44,7 +59,7 @@ export async function requestStaging(form: FormData): Promise<string> {
   if (!isWardrobeApiConfigured()) {
     throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
   }
-  const response = await expoFetch(endpoint("/v1/stage"), { method: "POST", body: form });
+  const response = await post("/v1/stage", { method: "POST", body: form });
   const text = await response.text();
   if (response.status !== 200) {
     throw new WardrobeApiError(`Garment staging failed (${response.status}): ${text.slice(0, 200)}`);
@@ -78,7 +93,7 @@ export async function runStyleTurn(
   if (!isWardrobeApiConfigured()) {
     throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
   }
-  const response = await expoFetch(endpoint("/v1/style/turn"), {
+  const response = await post("/v1/style/turn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages, tools, max_tokens: maxTokens ?? 1200, temperature: temperature ?? 0.8 }),
@@ -137,7 +152,7 @@ export async function runDecision(
   if (!isWardrobeApiConfigured()) {
     throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
   }
-  const response = await expoFetch(endpoint("/v1/decide"), {
+  const response = await post("/v1/decide", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ state, questions, images: images && images.length > 0 ? images : undefined }),

@@ -1,4 +1,3 @@
-import { clothingItems, mockOutfitAlbums } from "@/data/mock";
 import type {
   AvailabilityStatus,
   FeedbackEvent,
@@ -29,11 +28,8 @@ export const PREFERENCE_KEYS = {
   favorites: "favorite_item_ids",
   style: "style_preferences",
   dailyLooks: "daily_looks_v1",
+  mockCleanup: "mock_cleanup_v1",
 } as const;
-
-const DEFAULT_SAVED_LOOK_IDS = ["mock-album-office-01", "mock-album-casual-01"];
-const DEFAULT_FAVORITE_IDS = ["item-02", "item-07", "item-10"];
-const DEFAULT_STYLE_PREFERENCES = ["minimal", "old-money"];
 
 const ITEM_COLUMNS = [
   "id", "owner_id", "name", "category", "subcategory", "role", "primary_color",
@@ -160,40 +156,37 @@ function rowToOutfit(row: OutfitRow): Outfit {
 
 /** In-memory snapshot used when no SQLite driver is available (web / failure). */
 function inMemorySnapshot(): WardrobeSnapshot {
-  return {
-    items: [...clothingItems],
-    outfits: [...mockOutfitAlbums],
-    savedLookIds: [...DEFAULT_SAVED_LOOK_IDS],
-    favoriteIds: [...DEFAULT_FAVORITE_IDS],
-    stylePreferences: [...DEFAULT_STYLE_PREFERENCES],
-  };
+  return { items: [], outfits: [], savedLookIds: [], favoriteIds: [], stylePreferences: null };
 }
 
-async function seedIfEmpty(db: WardrobeDatabase): Promise<void> {
-  const itemCount = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) as count FROM items");
-  const outfitCount = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) as count FROM outfits");
-  const seedItems = (itemCount?.count ?? 0) === 0;
-  const seedOutfits = (outfitCount?.count ?? 0) === 0;
+/**
+ * The app now starts empty: a fresh install has no demo wardrobe and the user
+ * scans their own pieces. This one-time cleanup removes the mock seed from
+ * existing installs (mock ids are `item-NN` / `mock-*`; scanned ids are
+ * `scan-*`) and drops any cached looks built from them.
+ */
+async function cleanupDemoData(db: WardrobeDatabase): Promise<void> {
+  const done = await readPreference(db, PREFERENCE_KEYS.mockCleanup);
+  if (done) return;
 
   await db.withTransactionAsync(async () => {
-    if (seedItems) {
-      const statement = `INSERT INTO items (${ITEM_COLUMNS.join(", ")}) VALUES (${bind(ITEM_COLUMNS)})`;
-      for (const item of clothingItems) await db.runAsync(statement, itemToRow(item));
-    }
-    if (seedOutfits) {
-      const statement = `INSERT INTO outfits (${OUTFIT_COLUMNS.join(", ")}) VALUES (${bind(OUTFIT_COLUMNS)})`;
-      for (const outfit of mockOutfitAlbums) await db.runAsync(statement, outfitToRow(outfit));
-    }
+    await db.runAsync("DELETE FROM items WHERE id LIKE 'item-%'");
+    await db.runAsync("DELETE FROM outfits WHERE id LIKE 'mock-%' OR is_demo = 1");
+    await db.runAsync("DELETE FROM preferences WHERE key LIKE 'daily_looks_v1%'");
   });
 
-  await seedPreference(db, PREFERENCE_KEYS.savedLooks, JSON.stringify(DEFAULT_SAVED_LOOK_IDS));
-  await seedPreference(db, PREFERENCE_KEYS.favorites, JSON.stringify(DEFAULT_FAVORITE_IDS));
-  await seedPreference(db, PREFERENCE_KEYS.style, JSON.stringify(DEFAULT_STYLE_PREFERENCES));
-}
+  for (const key of [PREFERENCE_KEYS.savedLooks, PREFERENCE_KEYS.favorites]) {
+    const raw = await readPreference(db, key);
+    if (!raw) continue;
+    const values = parseJson<string[]>(raw, []).filter((id) => !id.startsWith("mock-") && !/^item-\d+$/.test(id));
+    await db.runAsync("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", key, JSON.stringify(values));
+  }
 
-async function seedPreference(db: WardrobeDatabase, key: string, value: string): Promise<void> {
-  const existing = await db.getFirstAsync<{ value: string }>("SELECT value FROM preferences WHERE key = ?", key);
-  if (!existing) await db.runAsync("INSERT INTO preferences (key, value) VALUES (?, ?)", key, value);
+  await db.runAsync(
+    "INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)",
+    PREFERENCE_KEYS.mockCleanup,
+    new Date().toISOString(),
+  );
 }
 
 async function readPreference(db: WardrobeDatabase, key: string): Promise<string | null> {
@@ -205,7 +198,7 @@ export async function loadWardrobeSnapshot(): Promise<WardrobeSnapshot> {
   const db = await getDatabase();
   if (!db) return inMemorySnapshot();
 
-  await seedIfEmpty(db);
+  await cleanupDemoData(db);
 
   const itemRows = await db.getAllAsync<ItemRow>("SELECT * FROM items ORDER BY created_at DESC, id ASC");
   const outfitRows = await db.getAllAsync<OutfitRow>("SELECT * FROM outfits");
@@ -216,9 +209,9 @@ export async function loadWardrobeSnapshot(): Promise<WardrobeSnapshot> {
   return {
     items: itemRows.map(rowToItem),
     outfits: outfitRows.map(rowToOutfit),
-    savedLookIds: parseJson<string[]>(savedLooks, DEFAULT_SAVED_LOOK_IDS),
-    favoriteIds: parseJson<string[]>(favorites, DEFAULT_FAVORITE_IDS),
-    stylePreferences: style ? parseJson<string[]>(style, DEFAULT_STYLE_PREFERENCES) : null,
+    savedLookIds: parseJson<string[]>(savedLooks, []),
+    favoriteIds: parseJson<string[]>(favorites, []),
+    stylePreferences: style ? parseJson<string[]>(style, []) : null,
   };
 }
 

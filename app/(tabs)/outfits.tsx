@@ -1,5 +1,5 @@
 import { adaptiveColors, radius, spacing, CircularGlassButton, FilterChip, ItemImage, WardrobeIcon } from "@/components/ui";
-import { mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
+import { type Item, type Outfit } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
@@ -10,7 +10,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 
 const filters = ["All", "Favorites", "Office", "Casual", "Summer", "Evening", "Travel"] as const;
 type Filter = (typeof filters)[number];
-type LibraryOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" | "mock" };
+type LibraryOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" };
 
 export default function OutfitsScreen() {
   const { items, myLooks, savedLooks, toggleSavedLook, isSavedLook } = useCloset();
@@ -20,11 +20,7 @@ export default function OutfitsScreen() {
 
   const outfits = useMemo<LibraryOutfit[]>(() => {
     const altaLooks = savedLooks.map((outfit) => ({ ...outfit, source: "saved" as const }));
-    return [
-      ...altaLooks,
-      ...myLooks.map((outfit) => ({ ...outfit, source: "mine" as const })),
-      ...mockOutfitAlbums.map((outfit) => ({ ...outfit, source: "mock" as const })),
-    ];
+    return [...altaLooks, ...myLooks.map((outfit) => ({ ...outfit, source: "mine" as const }))];
   }, [myLooks, savedLooks]);
 
   const filteredOutfits = outfits.filter((outfit) => {

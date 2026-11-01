@@ -1,7 +1,7 @@
 import type { Item, Outfit } from "@/data/mock";
 import { WardrobeApiError } from "@/services/api/wardrobe-api";
 import { triageWardrobeDiff, type WardrobeDiff } from "@/services/decision";
-import { composeOutfitsAI, type OutfitContext } from "@/services/outfit-engine";
+import { composeOutfitsAI, type OutfitContext, type OutfitSuggestion } from "@/services/outfit-engine";
 import { PREFERENCE_KEYS, readPreferenceValue, writePreference } from "@/services/storage/wardrobe-repository";
 import { useCloset } from "@/state/closet-context";
 import { useWeather } from "@/state/use-weather";
@@ -15,6 +15,8 @@ export type DailyLooks = {
   error?: string;
   refreshedAt?: string;
   fromCache: boolean;
+  /** Role-based hints when the wardrobe is too thin to style a full look. */
+  suggestions: OutfitSuggestion[];
 };
 
 /** Debounce for wardrobe-mutation triage (batch rapid scans/imports). */
@@ -126,7 +128,7 @@ export function useDailyLooks(
   const { weather, status: weatherStatus } = useWeather();
   const aestheticId = options.aestheticId ?? "all";
   const count = options.count ?? 3;
-  const [state, setState] = useState<DailyLooks>({ looks: [], status: "loading", fromCache: false });
+  const [state, setState] = useState<DailyLooks>({ looks: [], status: "loading", fromCache: false, suggestions: [] });
   const [nonce, setNonce] = useState(0);
   const prevItemsRef = useRef<Item[] | null>(null);
   const lastHashRef = useRef<string | null>(null);
@@ -155,7 +157,7 @@ export function useDailyLooks(
 
     const settleCache = (cached: CachedBatch) => {
       persist(cached.looks);
-      setState({ looks: cached.looks, status: "ready", refreshedAt: cached.generatedAt, fromCache: true });
+      setState({ looks: cached.looks, status: "ready", refreshedAt: cached.generatedAt, fromCache: true, suggestions: [] });
       prevItemsRef.current = items;
       lastHashRef.current = hash;
     };
@@ -169,7 +171,7 @@ export function useDailyLooks(
           weather: weather ?? undefined,
         });
         persist(result.outfits);
-        if (active) setState({ looks: result.outfits, status: "ready", refreshedAt: new Date().toISOString(), fromCache: false });
+        if (active) setState({ looks: result.outfits, status: "ready", refreshedAt: new Date().toISOString(), fromCache: false, suggestions: result.suggestions ?? [] });
       } catch (error) {
         const message = error instanceof WardrobeApiError ? error.message : "Something went wrong while styling. Try again.";
         // Keep previously generated looks if we have them; never substitute
@@ -182,6 +184,7 @@ export function useDailyLooks(
             error: message,
             refreshedAt: new Date().toISOString(),
             fromCache: Boolean(cached),
+            suggestions: [],
           });
         }
       }
@@ -195,7 +198,7 @@ export function useDailyLooks(
 
       // Fresh cache: show immediately (0 LLM calls).
       if (cached && cached.looks.length > 0 && cached.itemHash === hash) {
-        setState({ looks: cached.looks, status: "ready", refreshedAt: cached.generatedAt, fromCache: true });
+        setState({ looks: cached.looks, status: "ready", refreshedAt: cached.generatedAt, fromCache: true, suggestions: [] });
         prevItemsRef.current = items;
         lastHashRef.current = hash;
         return;

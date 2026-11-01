@@ -19,7 +19,7 @@ export default function HomeScreen() {
   const [viewModes, setViewModes] = useState<Record<string, OutfitViewMode>>({});
   const [woreIds, setWoreIds] = useState<Set<string>>(() => new Set());
   const { items, myLooks, isSavedLook, toggleSavedLook, logWear } = useCloset();
-  const { looks: outfits, status, error, refresh } = useDailyLooks({ aestheticId: selectedAestheticId, count: 3 });
+  const { looks: outfits, status, error, refresh, suggestions } = useDailyLooks({ aestheticId: selectedAestheticId, count: 3 });
 
   const setMode = (outfitId: string, mode: OutfitViewMode) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -87,6 +87,29 @@ export default function HomeScreen() {
         {status === "error" && outfits.length === 0 && !error && (
           <Card className="items-center gap-3 rounded-[18px] py-8">
             <Text className="text-xs font-semibold text-black/45 dark:text-white/45">Nothing to style yet — add a few pieces.</Text>
+          </Card>
+        )}
+
+        {status !== "loading" && outfits.length === 0 && suggestions.length > 0 && (
+          <Card className="gap-3 rounded-[18px] p-4">
+            <Text className="text-[17px] font-bold tracking-[-0.3px] text-black dark:text-[#FFF9ED]">Not quite enough to style yet</Text>
+            <Text className="text-xs font-medium text-black/45 dark:text-white/45">
+              Alta needs a few more pieces before she can build a full look. Add any of these:
+            </Text>
+            <View className="gap-2 pt-1">
+              {suggestions.map((suggestion) => (
+                <View key={suggestion.role} className="flex-row items-start gap-2">
+                  <SymbolView name="plus.circle" tintColor="rgba(0,0,0,0.35)" style={{ width: 15, height: 15, marginTop: 1 }} />
+                  <Text className="flex-1 text-xs font-semibold text-black/60 dark:text-white/60">
+                    {suggestion.label}
+                    <Text className="font-medium text-black/40 dark:text-white/40"> — {suggestion.hint}</Text>
+                  </Text>
+                </View>
+              ))}
+            </View>
+            <Pressable onPress={() => router.push("/scan")} className="mt-1 self-start rounded-full bg-black px-4 py-1.5 active:scale-[0.96]">
+              <Text className="text-[11px] font-bold text-white">Add clothes</Text>
+            </Pressable>
           </Card>
         )}
 

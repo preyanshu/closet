@@ -1,5 +1,5 @@
 import { adaptiveColors, radius, GlassButton, Screen, SectionHeader, Sheet, WardrobeIcon } from "@/components/ui";
-import { clothingItems, mockOutfitAlbums, type Item, type Outfit } from "@/data/mock";
+import { type Item, type Outfit } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
 import { Image } from "expo-image";
 import { router } from "expo-router";
@@ -20,9 +20,13 @@ export default function PlanScreen() {
   const [plannedLooks, setPlannedLooks] = useState<Record<string, string>>({});
   const [wornDays, setWornDays] = useState<Set<string>>(() => new Set());
   const { width } = useWindowDimensions();
+  const mostWorn = useMemo(
+    () => [...items].sort((a, b) => b.wearCount - a.wearCount)[0] ?? null,
+    [items],
+  );
 
   const monthCells = useMemo(() => getMonthCells(visibleDate), [visibleDate]);
-  const outfitOptions = useMemo<Outfit[]>(() => [...myLooks, ...savedLooks, ...mockOutfitAlbums], [myLooks, savedLooks]);
+  const outfitOptions = useMemo<Outfit[]>(() => [...myLooks, ...savedLooks], [myLooks, savedLooks]);
   const selectedMonth = visibleDate.getMonth() === today.getMonth() && visibleDate.getFullYear() === today.getFullYear();
   const monthLabel = `${monthNames[visibleDate.getMonth()]} ${visibleDate.getFullYear()}`;
   const cellWidth = (width - 64) / calendarColumns;
@@ -56,7 +60,7 @@ export default function PlanScreen() {
         </View>
 
         <View style={{ flexDirection: "row", gap: 28, borderBottomWidth: 1, borderColor: adaptiveColors.border, paddingBottom: 18 }}>
-          <MiniInsight title="Most worn" value="Cream knit polo" imageUrl={clothingItems[2].displayAssetUri} />
+          <MiniInsight title="Most worn" value={mostWorn?.name ?? "Nothing yet"} imageUrl={mostWorn?.displayAssetUri} />
           <MiniInsight title="Closet usage" value="0%" />
         </View>
 

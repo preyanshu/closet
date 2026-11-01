@@ -6,7 +6,7 @@ import { useWardrobeTheme } from "@/theme/wardrobe-theme";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ScrollViewInstance } from "react-native";
 import Animated, { Easing, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -27,7 +27,7 @@ export default function BuilderScreen() {
   const [selectedIds, setSelectedIds] = useState({ ...emptySelection });
   const [activeCategory, setActiveCategory] = useState<ClothingCategory>("top");
   const tabLayouts = useRef<Partial<Record<ClothingCategory, { x: number; width: number }>>>({});
-  const tabRail = useRef<ScrollView>(null);
+  const tabRail = useRef<ScrollViewInstance>(null);
   const underlineX = useSharedValue(0);
   const underlineWidth = useSharedValue(0);
   const contentOpacity = useSharedValue(1);
@@ -47,7 +47,7 @@ export default function BuilderScreen() {
   const [pressedId, setPressedId] = useState<string | null>(null);
   const saving = useRef(false);
   const request = useRef<AbortController | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const [phase, setPhase] = useState<"select" | "generating" | "preview">("select");
   const [suggestions, setSuggestions] = useState<Outfit[]>([]);
   const [pickedId, setPickedId] = useState<string | null>(null);

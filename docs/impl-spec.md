@@ -67,18 +67,19 @@ render blank rows for the demo wardrobe.
   `wear_events`/`plans`/`feedback_events` are created and have repositories now; their UI
   capture wires up in PR6.
 
-### Seeding
-- On first run (empty `items`/`outfits`) the DB is seeded from `data/mock.ts`: the 18 wardrobe
-  items and the 7 demo albums (`source: "demo"`, `isDemo: true`), plus the default saved looks,
-  favorites, and style preferences. Native first-run output is identical to the old in-memory
-  state; later launches read the DB as source of truth.
+### Seeding / clean start
+- The app starts **empty**: a fresh install has no demo wardrobe. `loadWardrobeSnapshot()` runs a
+  one-time `mock_cleanup_v1` migration that deletes legacy mock rows (`item-*` items,
+  `mock-*`/`isDemo` outfits), strips their ids from saved looks/favorites, and clears cached
+  daily looks. Scanned items persist as `scan-*` and are never touched. `data/mock.ts` remains
+  only as a typed fixture source for tests; nothing seeds or renders it at runtime.
 
 ### State
 - `ClosetProvider` hydrates from `loadWardrobeSnapshot()` and exposes `isHydrated`. Writes
   (`addItem`, `addMyLook`, `removeMyLook`, `toggleSavedLook`, `toggleFavorite`,
   `setStylePreferences`) apply optimistically and persist write-through. `myLooks` excludes
-  demo albums (`isDemo`). Outfit-library demo cards still render from `mockOutfitAlbums`; moving
-  that to context is a later refactor.
+  demo albums (`isDemo`). The outfit library renders only saved + custom looks; demo albums are
+  no longer shown.
 
 ### UI parity
 - `app/_layout.tsx` gates the navigator until `isHydrated`, showing an "Opening your closet…"
@@ -255,19 +256,24 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   deleted. New `composeOutfitsAI(context, items, options)` runs the agent and validates with
   `verifyAndRepairOutfits` (rules), which also drops duplicate roles (never two pairs of
   shoes) and caps at 6 pieces. It **never pads** — if the stylist returns one good look,
-  we surface one. Returns `{ outfits, reply, turnsUsed }`.
+  we surface one. Returns `{ outfits, reply, turnsUsed, suggestions }`. When the wardrobe
+  can't cover a top (or one-piece) + bottom + shoes, it returns **no looks plus role-based
+  add suggestions** (`canComposeOutfit` / `suggestWardrobeAdditions`) and skips the model
+  call entirely.
 - `composeOutfits` / `generateOutfitsForToday` remain for the manual **builder** lane only
   (instant rules). They are never used to fill or rescue agent output.
 
 ### Daily looks + triggers (`state/use-daily-looks.ts`)
-- Cache key `daily_looks_v1:{date}:{aestheticId}:{count}` + djb2 wardrobe hash (id:revision);
-  all tabs read one batch; cache hit = 0 LLM calls.
+- Cache key `daily_looks_v1:{date}:{aestheticId}:{count}:{weatherBucket}` + djb2 wardrobe hash
+  (id:revision); all tabs read one batch; cache hit = 0 LLM calls.
 - **Wardrobe-change triage**: hash change → 45s debounce (batch rapid scans) → hard rules
   (deleted/edited styling-relevant field while referenced by cached looks, or ≥3 additions →
   regenerate) → else Clef `triageWardrobeDiff` (≥0.7 regenerate; KEEP extends the cache to
   the new hash). Explicit ↻ (`refresh()`) always busts.
 - Fallback: AI failure → keep cached looks if present; otherwise surface an error. We never
-  substitute rules-engine output.
+  substitute rules-engine output. **Too few pieces** is not an error: the hook returns
+  `ready` with zero looks + `suggestions`; Home shows "Not quite enough to style yet" with
+  add-to-closet hints, and chat folds the hints into its reply.
 - Styling-relevant fields: role/category/subcategory/colors/pattern/fit/sleeve/texture/
   formality/warmth/styleTags/statuses — name/brand/price/photo edits are cosmetic.
 
