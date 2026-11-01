@@ -1,3 +1,4 @@
+import Constants from "expo-constants";
 import { fetch as expoFetch } from "expo/fetch";
 
 /**
@@ -6,7 +7,19 @@ import { fetch as expoFetch } from "expo/fetch";
  * image. No provider credentials live on the client.
  */
 
-const API_BASE_URL = (process.env.EXPO_PUBLIC_WARDROBE_API_URL ?? "").replace(/\/+$/, "");
+/**
+ * Resolve the worker origin. An explicit EXPO_PUBLIC_WARDROBE_API_URL wins;
+ * the special value "auto" (also the default) follows Metro's host so the app
+ * keeps working when the dev machine's LAN IP changes.
+ */
+function resolveBaseUrl(): string {
+  const configured = (process.env.EXPO_PUBLIC_WARDROBE_API_URL ?? "").trim().replace(/\/+$/, "");
+  if (configured && configured !== "auto") return configured;
+  const host = (Constants.expoConfig?.hostUri ?? "").split(":")[0];
+  return host ? `http://${host}:8787` : "";
+}
+
+const API_BASE_URL = resolveBaseUrl();
 
 export class WardrobeApiError extends Error {}
 
