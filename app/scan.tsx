@@ -1,7 +1,7 @@
 import { aesthetics, categoryLabels, type ClothingCategory } from "@/data/mock";
 import { defaultRoleForCategory } from "@/types/taxonomy";
 import { adaptiveColors, radius, Button, GlassPillButton, ModalHeader, WardrobeIcon } from "@/components/ui";
-import { AUTO_CONFIRM_THRESHOLD, detectGarment, suggestAesthetics, toAiAttributes, type GarmentAttributes } from "@/services/garment-detect";
+import { AUTO_CONFIRM_THRESHOLD, detectGarment, detectItemPresence, suggestAesthetics, toAiAttributes, type GarmentAttributes } from "@/services/garment-detect";
 import { stageGarment } from "@/services/garment-staging";
 import { useCloset } from "@/state/closet-context";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -68,6 +68,7 @@ const DETAIL_FIELD_LABELS: Record<string, string> = {
   formality: "Formality",
   warmth: "Warmth",
   category: "Category",
+  subcategory: "Type",
   primary_color: "Color",
 };
 
@@ -145,16 +146,42 @@ export default function ScanModal() {
     try {
       updatePending(id, (it) => ({ ...it, status: "processing" as ItemStatus, error: null, progress: 0 }));
       updatePending(id, (it) => ({ ...it, progress: 10 }));
-      const [staged, detected] = await Promise.all([
-        stageGarment(uri).then((result) => {
-          updatePending(id, (it) => (it.status === "processing" ? { ...it, cleanUri: result.cleanUri, progress: Math.max(it.progress, 60) } : it));
-          return result;
-        }),
-        detectGarment(uri).then((result) => {
-          updatePending(id, (it) => (it.status === "processing" ? { ...it, progress: Math.max(it.progress, 60) } : it));
-          return result;
-        }),
-      ]);
+
+      // Cheap Clef gate: skip Flux staging + vision extraction for non-items.
+      const presence = await detectItemPresence(uri).catch(() => ({ present: true, confidence: 0 }));
+      if (!presence.present) {
+        updatePending(id, (it) => ({
+          ...it,
+          status: "error" as ItemStatus,
+          name: "No item detected",
+          error: "No clothing or accessory item is visible in this photo. Retake it with the piece clearly in frame.",
+          progress: 0,
+        }));
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        return;
+      }
+      updatePending(id, (it) => ({ ...it, progress: 20 }));
+
+      // Identify first, then stage: the extraction result tells Flux exactly
+      // which item to isolate so background fabric (bedsheets, etc.) is dropped.
+      const detected = await detectGarment(uri);
+      updatePending(id, (it) => ({
+        ...it,
+        name: detected.name,
+        category: detected.category,
+        color: detected.primary_color,
+        progress: 45,
+      }));
+
+      const staged = await stageGarment(uri, {
+        name: detected.name,
+        subcategory: detected.subcategory,
+        category: detected.category,
+        primaryColor: detected.primary_color,
+        material: detected.material,
+      });
+      updatePending(id, (it) => ({ ...it, cleanUri: staged.cleanUri, progress: 90 }));
+
       updatePending(id, (it) => ({
         ...it,
         status: "ready" as ItemStatus,
@@ -304,9 +331,10 @@ export default function ScanModal() {
         ownerId: "local-demo",
         name: item.name,
         category: item.category,
-        role: defaultRoleForCategory(item.category),
+        role: attrs?.role ?? defaultRoleForCategory(item.category),
+        subcategory: attrs?.subcategory || undefined,
         primaryColor: item.color.toLowerCase(),
-        secondaryColors: [],
+        secondaryColors: attrs?.secondary_colors ?? [],
         styleTags: item.aesthetics,
         pattern: attrs?.pattern || undefined,
         fit: attrs?.fit || undefined,

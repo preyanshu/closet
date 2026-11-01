@@ -310,15 +310,26 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
 ## PR7 — Detect rework (Clef-flash bounded extraction)
 
 - `services/garment-detect.ts`: the free-form vision-JSON prompt
-  (`llama-3.2-11b-vision-instruct` + `JSON.parse`) is replaced by **8 typed questions** on
+  (`llama-3.2-11b-vision-instruct` + `JSON.parse`) is replaced by **10 typed questions** on
   `runDecision(..., images=[dataUri])` → `/v1/decide` (Clef-flash multimodal): `category`,
-  `primary_color`, `fit`, `sleeve_length`, `pattern`, `texture` (choices from bounded sets),
-  `formality`, `warmth` (score questions on the ordered scale `["1".."5"]`, banded to
-  casual/smart-casual/formal and light/medium/heavy).
+  `subcategory`, `primary_color`, `secondary_color`, `fit`, `sleeve_length`, `pattern`,
+  `texture` (choices from bounded sets), `formality`, `warmth` (score questions on the ordered
+  scale `["1".."5"]`, banded to casual/smart-casual/formal and light/medium/heavy).
+- **Presence gate (cost saver)**: `detectItemPresence()` asks one cheap image question first.
+  If no clothing/accessory is visible it returns **"No item detected"** and skips Flux staging
+  + extraction entirely; it fails open, so a flaky gate never blocks a real scan.
+- The subcategory drives `category`, `role` (dresses/jumpsuits → `one_piece`, bags → `bag`, …)
+  and the name, so extraction stays coherent across garment types.
+- **Detection → staging (sequential)**: extraction runs first, then its
+  name/subcategory/color/material are injected into `buildStagingPrompt()`. The prompt names the
+  exact subject and treats everything else (bedsheets, bedding, tables, background fabric) as
+  removable background, and zooms in when the item is small in frame. This fixes staging that
+  previously kept the bedsheet along with a small item.
 - Every answer carries `confidence` + `probabilities`. `AUTO_CONFIRM_THRESHOLD = 0.85` →
   `AiAttribute.reviewStatus: "confirmed"`; below → `"suggested"` (tap-to-confirm chips in the
   scan ReviewSheet with confidence %). User edits flip the row to `source: "user"`.
-- **Deterministic name template** (`Black relaxed jacket`) — the model never writes names.
+- **Deterministic name template** (`Black leather sneaker`, `Cream knit polo`) — the model
+  never writes names.
 - `Item.aiAttributes` now actually populated (`toAiAttributes`, modelVersion `clef-flash`);
   `AiAttribute` gained optional `confidence`. Scan persists the full-fat fields it used to
   drop: `pattern/fit/sleeveLength/visibleTexture/formality/warmthBand`.

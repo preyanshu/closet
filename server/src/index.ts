@@ -61,7 +61,7 @@ const DEFAULT_DETECT_PROMPT = `You are a garment attribute extractor. Given a si
   "material": fabric if visible, else ""
 }`;
 
-const DEFAULT_STAGING_PROMPT = `Professional e-commerce product photography of the garment, laid completely flat and straightened on a pure white (#FFFFFF) seamless background. Preserve the exact sleeve/leg length, silhouette, neckline/collar, hem shape, color, pattern, graphic print, text, stitching, and hardware exactly as in the original photo. Fabric smooth and taut with no wrinkles or draping. Studio lighting, soft even shadows, sharp focus, centered composition. No mannequin, model, hangers, or props — just the garment isolated on white.`;
+const DEFAULT_STAGING_PROMPT = `Professional e-commerce product photography of ONLY the single item from the input photo, laid completely flat and straightened on a pure white (#FFFFFF) seamless background. The item is the ONLY subject: remove everything else in the frame — bedsheet, bedding, table, floor, wall, background fabric, hands, hangers, props, and other objects — and do NOT reproduce any background fabric. Preserve the exact silhouette, cut, proportions, color, pattern, texture, stitching, logos, and hardware exactly as in the original photo. Studio lighting, soft even shadows, sharp focus, centered composition. No mannequin, model, hands, hangers, props, or background fabric — just the isolated item on pure white.`;
 
 const app = new Hono<{ Bindings: Env }>();
 

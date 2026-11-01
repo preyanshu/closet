@@ -2,7 +2,38 @@ import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import { File, Paths } from "expo-file-system";
 import { isWardrobeApiConfigured, requestStaging } from "@/services/api/wardrobe-api";
 
-const STAGING_PROMPT = `Professional e-commerce product photography of the [GARMENT TYPE], laid completely flat and straightened on a pure white (#FFFFFF) seamless background. This is [EXACT SLEEVE/LENGTH TYPE — e.g. sleeveless / short-sleeve / long-sleeve / cropped / full-length] — do NOT change the sleeve or leg length, do NOT add or remove sleeves, do NOT alter the original cut in any way. Preserve the exact silhouette, neckline/collar, hem shape, and proportions exactly as shown in the original photo. Fabric is smooth and taut with no wrinkles, folds, creases, or draping — as if steamed and pinned flat for a catalog shoot. Preserve exact color, pattern, graphic print, text, stitching, and hardware (buttons, zippers, drawstrings) exactly as in the original — do not invent or omit any design details. Studio lighting, soft even shadows only, sharp focus, high resolution, centered composition. No mannequin, no model, no hangers, no props — just the garment isolated on white.`;
+export type StagingSubject = {
+  /** Human name from extraction, e.g. "Tan leather boot". */
+  name?: string;
+  subcategory?: string;
+  category?: string;
+  primaryColor?: string;
+  material?: string;
+};
+
+function describeSubject(subject?: StagingSubject): string {
+  if (!subject) return "garment";
+  if (subject.name?.trim()) return subject.name.trim().toLowerCase();
+  const material = (subject.material ?? "").replace("-like", "").trim();
+  const noun = (subject.subcategory || subject.category || "garment").toLowerCase();
+  return [subject.primaryColor?.toLowerCase(), material, noun].filter(Boolean).join(" ") || "garment";
+}
+
+/**
+ * Staging prompt is built from the extraction result: the identified item is
+ * the ONLY subject, and background fabric (bedsheets, blankets, tables) must
+ * be removed rather than reproduced.
+ */
+export function buildStagingPrompt(subject?: StagingSubject): string {
+  const item = describeSubject(subject);
+  return `Professional e-commerce product photography of ONLY the ${item} from the input photo, laid completely flat and straightened on a pure white (#FFFFFF) seamless background.
+
+ISOLATION — HIGHEST PRIORITY: the ${item} is the ONLY subject of this image. Everything else in the frame — bedsheet, bedding, blanket, pillow, table, floor, wall, fabric backdrop, hands, hangers, other clothes, props, and any surrounding object or material — is NOT part of the item and must be completely removed. Do NOT reproduce, crop, or include any background fabric, bed linen, wrinkles, or scene detail in the output. Cut the ${item} out cleanly and place it alone and centered on pure white. If the item is small in the frame, zoom in so it fills the composition.
+
+Preserve the exact silhouette, cut, proportions, color, pattern, texture, stitching, logos, and hardware (buttons, zippers, drawstrings, buckles, clasps, watch face) exactly as in the original photo — do not invent, add, or omit any design detail, and do not change the item's length or shape. Remove not a single part of the ${item} itself.
+
+Studio lighting, soft even shadows only, sharp focus, high resolution, centered composition. No mannequin, no model, no hands, no hangers, no props, no background fabric — just the isolated ${item} on a clean pure-white background.`;
+}
 
 const MAX_INPUT = 512;
 const MAX_RETRIES = 3;
@@ -24,8 +55,8 @@ export type StagingResult = {
  * Calls Cloudflare FLUX.2 Klein directly (no post-processing) with the
  * e-commerce staging prompt, then saves the returned image.
  */
-export async function stageGarment(uri: string): Promise<StagingResult> {
-  log("stageGarment called, input uri:", uri);
+export async function stageGarment(uri: string, subject?: StagingSubject): Promise<StagingResult> {
+  log("stageGarment called, input uri:", uri, "subject:", subject?.name ?? subject?.subcategory ?? "unknown");
 
   if (!isWardrobeApiConfigured()) {
     log("ERROR: wardrobe API not configured");
@@ -59,7 +90,7 @@ export async function stageGarment(uri: string): Promise<StagingResult> {
       const upload = new File(resized.uri);
       log("Upload file:", { name: upload.name, type: upload.type, size: upload.size });
       form.append("image", upload as any);
-      form.append("prompt", STAGING_PROMPT);
+      form.append("prompt", buildStagingPrompt(subject));
 
       const imageData = await requestStaging(form);
 

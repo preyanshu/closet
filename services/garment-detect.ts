@@ -2,7 +2,7 @@ import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import { File } from "expo-file-system";
 import type { ClothingCategory } from "@/data/mock";
 import { isWardrobeApiConfigured, runDecision, score1To5, WardrobeApiError } from "@/services/api/wardrobe-api";
-import type { AiAttribute, WarmthBand } from "@/types/domain";
+import type { AiAttribute, ItemRole, WarmthBand } from "@/types/domain";
 
 /**
  * Bounded-attribute garment extraction on Clef-flash (multimodal decision
@@ -25,6 +25,13 @@ const FIT_VALUES = ["slim", "regular", "relaxed", "oversized", "wide"] as const;
 const SLEEVE_VALUES = ["sleeveless", "short", "three-quarter", "long"] as const;
 const PATTERN_VALUES = ["solid", "striped", "plaid", "floral", "graphic", "other"] as const;
 const TEXTURE_VALUES = ["smooth", "knit", "denim", "woven", "fleece", "leather-like", "satin-like"] as const;
+const SUBCATEGORY_VALUES = [
+  "t-shirt", "shirt", "blouse", "polo", "tank top", "sweater", "knit", "hoodie", "sweatshirt", "dress", "jumpsuit",
+  "jeans", "trousers", "chinos", "skirt", "shorts", "leggings",
+  "coat", "jacket", "blazer", "cardigan", "vest", "puffer",
+  "sneaker", "boot", "loafer", "heel", "sandal", "flat", "dress shoe", "slipper",
+  "bag", "belt", "hat", "cap", "scarf", "sunglasses", "jewelry", "watch", "gloves", "socks", "other",
+] as const;
 
 const FORMALITY_BY_SCORE: Record<number, string> = { 1: "casual", 2: "casual", 3: "smart-casual", 4: "formal", 5: "formal" };
 const WARMTH_BY_SCORE: Record<number, WarmthBand> = { 1: "light", 2: "light", 3: "medium", 4: "heavy", 5: "heavy" };
@@ -37,8 +44,49 @@ const CATEGORY_NOUN: Record<ClothingCategory, string> = {
   accessory: "accessory",
 };
 
+const ROLE_BY_CATEGORY: Record<ClothingCategory, ItemRole> = {
+  top: "base_top",
+  bottom: "bottom",
+  outerwear: "outer_layer",
+  shoes: "footwear",
+  accessory: "other",
+};
+
+/** Subcategory → styling role, so dresses/jumpsuits become one_piece and bags get their own role. */
+const ROLE_BY_SUBCATEGORY: Record<string, ItemRole> = {
+  "t-shirt": "base_top", shirt: "base_top", blouse: "base_top", polo: "base_top", "tank top": "base_top",
+  sweater: "base_top", knit: "base_top", hoodie: "base_top", sweatshirt: "base_top",
+  dress: "one_piece", jumpsuit: "one_piece",
+  jeans: "bottom", trousers: "bottom", chinos: "bottom", skirt: "bottom", shorts: "bottom", leggings: "bottom",
+  coat: "outer_layer", jacket: "outer_layer", blazer: "outer_layer", cardigan: "outer_layer", vest: "outer_layer", puffer: "outer_layer",
+  sneaker: "footwear", boot: "footwear", loafer: "footwear", heel: "footwear", sandal: "footwear", flat: "footwear", "dress shoe": "footwear", slipper: "footwear",
+  bag: "bag", belt: "belt", hat: "hat", cap: "hat", scarf: "scarf", sunglasses: "eyewear", jewelry: "jewelry", watch: "jewelry", gloves: "other", socks: "socks",
+};
+
+/** Role → category, used when the subcategory is more specific than the category answer. */
+const CATEGORY_BY_ROLE: Record<ItemRole, ClothingCategory> = {
+  base_top: "top", one_piece: "top", mid_layer: "outerwear", outer_layer: "outerwear",
+  bottom: "bottom", footwear: "shoes",
+  bag: "accessory", belt: "accessory", hat: "accessory", eyewear: "accessory",
+  jewelry: "accessory", socks: "accessory", scarf: "accessory", other: "accessory",
+};
+
+const MATERIAL_WORD: Record<string, string> = {
+  knit: "knit",
+  denim: "denim",
+  fleece: "fleece",
+  "leather-like": "leather",
+  "satin-like": "satin",
+  woven: "",
+  smooth: "",
+};
+
 export type GarmentAttributes = {
   category: ClothingCategory;
+  /** Specific type, e.g. "sneaker", "trouser", "polo". */
+  subcategory: string;
+  /** Styling role derived from the subcategory (not model-reported). */
+  role: ItemRole;
   name: string;
   primary_color: string;
   secondary_colors: string[];
@@ -69,12 +117,17 @@ function normalizeColor(c: string): string {
 }
 
 /** Deterministic, editable name template — the model never writes names. */
-function templateName(color: string, fit: string, pattern: string, category: ClothingCategory): string {
-  const parts = [color || "unknown"];
-  if (fit && fit !== "regular") parts.push(fit);
-  if (pattern && pattern !== "solid") parts.push(pattern);
-  parts.push(CATEGORY_NOUN[category] ?? "piece");
-  const name = parts.join(" ");
+function templateName(
+  color: string,
+  fit: string,
+  material: string,
+  subcategory: string,
+  category: ClothingCategory,
+): string {
+  const materialWord = MATERIAL_WORD[material] ?? "";
+  const descriptor = materialWord || (fit && fit !== "regular" ? fit : "");
+  const noun = subcategory || CATEGORY_NOUN[category] || "piece";
+  const name = [color || "unknown", descriptor, noun].filter(Boolean).join(" ");
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
@@ -120,7 +173,9 @@ export function toAiAttributes(attrs: GarmentAttributes): AiAttribute[] {
   const now = new Date().toISOString();
   const fields: Array<[string, string]> = [
     ["category", attrs.category],
+    ["subcategory", attrs.subcategory],
     ["primary_color", attrs.primary_color],
+    ["secondary_color", attrs.secondary_colors.join(", ")],
     ["fit", attrs.fit],
     ["sleeve_length", attrs.sleeve_length],
     ["pattern", attrs.pattern],
@@ -178,19 +233,12 @@ function bandFor<T>(map: Record<number, T>, score: number, fallback: T): T {
   return map[rounded] ?? fallback;
 }
 
-export async function detectGarment(uri: string): Promise<GarmentAttributes> {
-  log("detectGarment called, input uri:", uri);
-
-  if (!isWardrobeApiConfigured()) {
-    log("ERROR: wardrobe API not configured");
-    throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
-  }
-
+async function prepareImageDataUri(uri: string, maxInput = MAX_INPUT): Promise<string> {
   let resized;
   try {
     resized = await manipulateAsync(
       uri,
-      [{ resize: { width: MAX_INPUT } }],
+      [{ resize: { width: maxInput } }],
       { compress: 0.9, format: SaveFormat.JPEG }
     );
     log("Downscaled OK, resized.uri:", resized.uri);
@@ -199,20 +247,66 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
     throw new Error(`Failed to downscale image: ${e?.message ?? e}`);
   }
 
-  let dataUri: string;
   try {
     const b64 = await new File(resized.uri).base64();
-    dataUri = `data:image/jpeg;base64,${b64}`;
+    return `data:image/jpeg;base64,${b64}`;
   } catch (e: any) {
     log("ERROR: base64 encode failed:", e);
     throw new Error(`Failed to read image: ${e?.message ?? e}`);
   }
+}
+
+export type ItemPresence = {
+  present: boolean;
+  confidence: number;
+};
+
+/**
+ * Cheap clef-flash gate before staging/detection: one image question decides
+ * whether the photo actually contains a wearable piece. Fails open so a
+ * flaky gate never blocks a real scan.
+ */
+export async function detectItemPresence(uri: string): Promise<ItemPresence> {
+  if (!isWardrobeApiConfigured()) return { present: true, confidence: 0 };
+  const dataUri = await prepareImageDataUri(uri, 512);
+  const answers = await runDecision(
+    {
+      task: "check_wearable_item",
+      note: "Look at the photo and decide whether a wearable piece is clearly visible and extractable.",
+    },
+    {
+      item_visible: {
+        type: "choice",
+        instructions: "Does the photo contain a physical object that is a wearable item — clothing, shoes, bags, belts, hats, jewelry, watches, or accessories — even if it is small or resting on furniture? Choose no ONLY when there is no wearable object at all (empty room, food, document, pet, plain texture).",
+        criteria: { yes: "A wearable item is present, even if small", no: "No wearable item is present" },
+      },
+    },
+    [dataUri],
+  );
+  const answer = choiceAnswer(answers, "item_visible");
+  const confidence = answer?.confidence ?? 0;
+  const present = !(answer?.choice === "no" && confidence >= 0.55);
+  log("Presence gate:", { choice: answer?.choice, confidence, present });
+  return { present, confidence };
+}
+
+export async function detectGarment(uri: string): Promise<GarmentAttributes> {
+  log("detectGarment called, input uri:", uri);
+
+  if (!isWardrobeApiConfigured()) {
+    log("ERROR: wardrobe API not configured");
+    throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
+  }
+
+  const dataUri = await prepareImageDataUri(uri);
 
   const answers = await runDecision(
     { task: "extract_garment_attributes", note: "Answer from the photo; pick the closest allowed value." },
     {
-      category: { type: "choice", instructions: "What kind of garment is this?", criteria: Object.fromEntries(CATEGORY_VALUES.map((v) => [v, v])) },
+      category: { type: "choice", instructions: "What kind of piece is this? top = shirts/knits/dresses; bottom = trousers/skirts/shorts; outerwear = coats/jackets; shoes = footwear; accessory = bags/belts/hats/jewelry.", criteria: Object.fromEntries(CATEGORY_VALUES.map((v) => [v, v])) },
+      subcategory: { type: "choice", instructions: "The most specific type of piece. Pick 'other' only if nothing fits.", criteria: Object.fromEntries(SUBCATEGORY_VALUES.map((v) => [v, v])) },
       primary_color: { type: "choice", instructions: "What is the dominant color?", criteria: Object.fromEntries(COLOR_VALUES.map((v) => [v, v])) },
+      secondary_color: { type: "choice", instructions: "The second most prominent color, or none.", criteria: { ...Object.fromEntries(COLOR_VALUES.map((v) => [v, v])), none: "none" } },
       fit: { type: "choice", instructions: "How does it fit?", criteria: Object.fromEntries(FIT_VALUES.map((v) => [v, v])) },
       sleeve_length: { type: "choice", instructions: "Sleeve/leg length as visible. If not applicable, pick the closest.", criteria: Object.fromEntries(SLEEVE_VALUES.map((v) => [v, v])) },
       pattern: { type: "choice", instructions: "What is the pattern?", criteria: Object.fromEntries(PATTERN_VALUES.map((v) => [v, v])) },
@@ -224,7 +318,9 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
   );
 
   const categoryAnswer = choiceAnswer(answers, "category");
+  const subcategoryAnswer = choiceAnswer(answers, "subcategory");
   const colorAnswer = choiceAnswer(answers, "primary_color");
+  const secondaryAnswer = choiceAnswer(answers, "secondary_color");
   const fitAnswer = choiceAnswer(answers, "fit");
   const sleeveAnswer = choiceAnswer(answers, "sleeve_length");
   const patternAnswer = choiceAnswer(answers, "pattern");
@@ -234,6 +330,7 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
 
   const confidences: Record<string, number> = {
     category: categoryAnswer?.confidence ?? 0,
+    subcategory: subcategoryAnswer?.confidence ?? 0,
     primary_color: colorAnswer?.confidence ?? 0,
     fit: fitAnswer?.confidence ?? 0,
     sleeve_length: sleeveAnswer?.confidence ?? 0,
@@ -243,19 +340,29 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
     warmth: warmthAnswer?.confidence ?? 0,
   };
 
-  const category = mapCategory(categoryAnswer?.choice);
+  const subcategory = (subcategoryAnswer?.choice ?? "").trim();
+  const derivedRole = ROLE_BY_SUBCATEGORY[subcategory];
+  const category = (derivedRole ? CATEGORY_BY_ROLE[derivedRole] : undefined) ?? mapCategory(categoryAnswer?.choice);
+  const role = derivedRole ?? ROLE_BY_CATEGORY[category];
   const primaryColor = normalizeColor(colorAnswer?.choice ?? "black");
-  const fit = fitAnswer?.choice ?? "regular";
+  const secondaryColors =
+    secondaryAnswer && secondaryAnswer.choice !== "none"
+      ? [normalizeColor(secondaryAnswer.choice)].filter((color) => color && color !== primaryColor)
+      : [];
+  const fit = category === "shoes" || category === "accessory" ? "regular" : fitAnswer?.choice ?? "regular";
+  const sleeve = category === "top" || category === "outerwear" ? sleeveAnswer?.choice ?? "" : "";
   const pattern = patternAnswer?.choice ?? "solid";
   const material = textureAnswer?.choice ?? "";
 
   const attrs: GarmentAttributes = {
     category,
-    name: templateName(primaryColor, fit, pattern, category),
+    subcategory,
+    role,
+    name: templateName(primaryColor, fit, material, subcategory, category),
     primary_color: primaryColor,
-    secondary_colors: [],
+    secondary_colors: secondaryColors,
     fit,
-    sleeve_length: sleeveAnswer?.choice ?? "",
+    sleeve_length: sleeve,
     pattern,
     material,
     formality: formalityAnswer ? bandFor(FORMALITY_BY_SCORE, formalityAnswer.score, "smart-casual") : "smart-casual",
