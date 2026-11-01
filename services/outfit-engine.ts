@@ -3,7 +3,7 @@ import { WardrobeApiError } from "@/services/api/wardrobe-api";
 import { runStylistAgent, critiqueOutfits, type RawStyleOutfit, type StylistWardrobe } from "@/services/stylist-agent";
 import { judgeOccasionFit } from "@/services/decision";
 import type { WeatherSummary } from "@/services/weather";
-import type { ItemRole, OutfitItemRef } from "@/types/domain";
+import { DEFAULT_WEARER_PRESENTATION, type ItemRole, type OutfitItemRef, type WearerPresentation } from "@/types/domain";
 
 /** Upper bound on looks per batch. We never pad — fewer is fine. */
 const MAX_OUTFITS = 5;
@@ -661,6 +661,8 @@ export type ComposeAIOptions = {
   history?: Array<{ role: string; content: string }>;
   /** Today's weather (already fetched) — the stylist styles to it. */
   weather?: WeatherSummary;
+  /** Wearer presentation from profile metadata; defaults to female for now. */
+  presentation?: WearerPresentation;
   /** Sampling temperature for the stylist model (default 0.8; higher = more creative). */
   temperature?: number;
   /**
@@ -707,6 +709,7 @@ export async function composeOutfitsAI(
   // The model decides how many looks are actually good (up to 5); we never pad
   // toward a fixed target — one great look beats three mediocre ones.
   const season = context.season ?? options.weather?.seasonBand;
+  const presentation = options.presentation ?? DEFAULT_WEARER_PRESENTATION;
   const wardrobe: StylistWardrobe = {
     items,
     favoriteIds: new Set(options.favoriteIds ?? []),
@@ -719,6 +722,7 @@ export async function composeOutfitsAI(
       season,
       styleTags: context.styleTags,
       weather: options.weather,
+      presentation,
       userRequest: options.userRequest,
     },
     wardrobe,
@@ -741,7 +745,7 @@ export async function composeOutfitsAI(
       );
       if (!fit.ok) {
         const reviewed = await critiqueOutfits(
-          { occasion: context.occasion, season, styleTags: context.styleTags, weather: options.weather, count: MAX_OUTFITS },
+          { occasion: context.occasion, season, styleTags: context.styleTags, weather: options.weather, presentation, count: MAX_OUTFITS },
           result.outfits,
           wardrobe,
           { feedback: fit.summary },

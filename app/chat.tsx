@@ -61,7 +61,7 @@ export default function ChatScreen() {
   const rejectedRef = useRef<Array<{ label: string; itemIds: string[] }>>([]);
   const retryCountRef = useRef(0);
   const scrollRef = useRef<ScrollViewInstance>(null);
-  const { items, favoriteIds, savedLooks, toggleSavedLook } = useCloset();
+  const { items, favoriteIds, savedLooks, toggleSavedLook, profile } = useCloset();
   const { weather } = useWeather();
 
   useEffect(() => {
@@ -119,6 +119,7 @@ export default function ChatScreen() {
           system: CHAT_SYSTEM,
           history: history(),
           weather: weather ?? undefined,
+          presentation: profile.presentation,
         },
       );
 
@@ -196,6 +197,7 @@ export default function ChatScreen() {
           system: CHAT_SYSTEM,
           history: history(),
           weather: weather ?? undefined,
+          presentation: profile.presentation,
         },
       );
 

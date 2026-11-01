@@ -1,5 +1,6 @@
 import { adaptiveColors, radius, Avatar, Card, GlassButton, Screen, SectionHeader } from "@/components/ui";
 import { useCloset } from "@/state/closet-context";
+import { WEARER_PRESENTATIONS } from "@/types/domain";
 import { SymbolView } from "expo-symbols";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
@@ -25,7 +26,7 @@ const settingsGroups = [
 ];
 
 export default function ProfileScreen() {
-  const { stylePreferences } = useCloset();
+  const { stylePreferences, profile, updateProfile } = useCloset();
 
   return (
     <Screen>
@@ -51,9 +52,28 @@ export default function ProfileScreen() {
       )}
 
       <Card className="gap-3">
-        <View style={{ gap: 3 }}>
-          <Text style={{ fontSize: 12, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5 }}>Appearance</Text>
-          <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>Light</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <View style={{ flex: 1, gap: 3 }}>
+            <Text style={{ fontSize: 12, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5 }}>Styled for</Text>
+            <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>Tailors AI looks to this presentation.</Text>
+          </View>
+          <View style={{ flexDirection: "row", gap: 6 }}>
+            {WEARER_PRESENTATIONS.map((option) => {
+              const active = (profile.presentation ?? "female") === option;
+              return (
+                <Pressable
+                  key={option}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    updateProfile({ ...profile, presentation: option });
+                  }}
+                  style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.pill, backgroundColor: active ? adaptiveColors.label : "rgba(0,0,0,0.05)" }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: "700", textTransform: "capitalize", color: active ? adaptiveColors.onAccent : adaptiveColors.secondaryLabel }}>{option === "unspecified" ? "Any" : option}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
       </Card>
 

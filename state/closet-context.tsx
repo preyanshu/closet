@@ -1,5 +1,6 @@
 import type { Item, Outfit } from "@/data/mock";
 import type { WearEvent } from "@/types/domain";
+import { DEFAULT_WEARER_PRESENTATION, type UserProfileMetadata } from "@/types/domain";
 import {
   PREFERENCE_KEYS,
   deleteItem,
@@ -8,6 +9,7 @@ import {
   persistItem,
   persistOutfit,
   recordWearEvent,
+  saveProfileMetadata,
   writePreference,
 } from "@/services/storage/wardrobe-repository";
 import { createContext, type PropsWithChildren, use, useCallback, useEffect, useMemo, useState } from "react";
@@ -36,6 +38,9 @@ type ClosetContextValue = {
   isFavorite: (itemId: string) => boolean;
   stylePreferences: string[];
   setStylePreferences: (prefs: string[]) => void;
+  /** User profile metadata (presentation etc.) used to tailor looks. */
+  profile: UserProfileMetadata;
+  updateProfile: (profile: UserProfileMetadata) => void;
 };
 
 const ClosetContext = createContext<ClosetContextValue | null>(null);
@@ -49,6 +54,7 @@ export function ClosetProvider({ children }: PropsWithChildren) {
   const [savedLookIds, setSavedLookIds] = useState<Set<string>>(() => new Set());
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => new Set());
   const [stylePreferences, setStylePreferencesState] = useState<string[]>([]);
+  const [profile, setProfile] = useState<UserProfileMetadata>({ presentation: DEFAULT_WEARER_PRESENTATION });
 
   useEffect(() => {
     let active = true;
@@ -62,6 +68,7 @@ export function ClosetProvider({ children }: PropsWithChildren) {
         setSavedLookIds(new Set(snapshot.savedLookIds));
         setFavoriteIds(new Set(snapshot.favoriteIds));
         setStylePreferencesState(snapshot.stylePreferences ?? []);
+        setProfile(snapshot.profile);
         setIsHydrated(true);
       })
       .catch((error) => {
@@ -164,6 +171,11 @@ export function ClosetProvider({ children }: PropsWithChildren) {
     void writePreference(PREFERENCE_KEYS.style, JSON.stringify(prefs));
   }, []);
 
+  const updateProfile = useCallback((next: UserProfileMetadata) => {
+    setProfile(next);
+    void saveProfileMetadata(next);
+  }, []);
+
   const value = useMemo<ClosetContextValue>(() => ({
     isHydrated,
     items,
@@ -185,7 +197,9 @@ export function ClosetProvider({ children }: PropsWithChildren) {
     logWear,
     stylePreferences,
     setStylePreferences,
-  }), [isHydrated, items, addedMessage, myLooks, savedLooks, savedLookIds, favoriteIds, stylePreferences, addItem, updateItem, removeItem, addMyLook, removeMyLook, toggleSavedLook, isSavedLook, toggleFavorite, isFavorite, logWear, setStylePreferences]);
+    profile,
+    updateProfile,
+  }), [isHydrated, items, addedMessage, myLooks, savedLooks, savedLookIds, favoriteIds, stylePreferences, profile, addItem, updateItem, removeItem, addMyLook, removeMyLook, toggleSavedLook, isSavedLook, toggleFavorite, isFavorite, logWear, setStylePreferences, updateProfile]);
 
   return <ClosetContext value={value}>{children}</ClosetContext>;
 }

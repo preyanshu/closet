@@ -39,6 +39,17 @@ export type ProcessingStatus = (typeof PROCESSING_STATUSES)[number];
 export const WARMTH_BANDS = ["light", "medium", "heavy"] as const;
 export type WarmthBand = (typeof WARMTH_BANDS)[number];
 
+/** How the wearer wants looks styled; sourced from their profile metadata. */
+export const WEARER_PRESENTATIONS = ["female", "male", "unspecified"] as const;
+export type WearerPresentation = (typeof WEARER_PRESENTATIONS)[number];
+
+/** Testing default until profile editing writes real metadata. */
+export const DEFAULT_WEARER_PRESENTATION: WearerPresentation = "female";
+
+export type UserProfileMetadata = {
+  presentation?: WearerPresentation;
+};
+
 export const AI_REVIEW_STATUSES = ["suggested", "confirmed"] as const;
 export type AiReviewStatus = (typeof AI_REVIEW_STATUSES)[number];
 

@@ -1,5 +1,6 @@
 import type { Item, Outfit } from "@/data/mock";
 import { describeWeather, type WeatherSummary } from "@/services/weather";
+import type { WearerPresentation } from "@/types/domain";
 import { runStyleTurn, WardrobeApiError } from "@/services/api/wardrobe-api";
 
 function isEligible(item: Item): boolean {
@@ -77,6 +78,8 @@ type ToolContext = {
   season?: string;
   styleTags?: string[];
   weather?: WeatherSummary;
+  /** Sourced from profile metadata; omitted when unspecified. */
+  presentation?: WearerPresentation;
 };
 
 export type AgentToolName = "get_wardrobe_overview" | "search_items" | "get_items" | "get_saved_looks" | "get_item";
@@ -460,6 +463,9 @@ function buildUserMessage(context: ToolContext & { count?: number; userRequest?:
     `occasion: ${occasion}`,
     `season: ${season}`,
     `style_tags: ${styleTags}`,
+    ...(context.presentation && context.presentation !== "unspecified"
+      ? [`wearer_presentation: ${context.presentation} (style the looks to suit this wearer)`]
+      : []),
     `outfits: 3 to 5 of your best — fewer if you cannot make that many truly good ones`,
     `</context>`,
   ];
@@ -626,6 +632,9 @@ export async function critiqueOutfits(
     `occasion: ${context.occasion ?? "everyday"}`,
     `season: ${context.season ?? "all seasons"}`,
     `style_tags: ${context.styleTags?.length ? context.styleTags.join(", ") : "none"}`,
+    ...(context.presentation && context.presentation !== "unspecified"
+      ? [`wearer_presentation: ${context.presentation} (style the looks to suit this wearer)`]
+      : []),
     `outfits_needed: ${context.count ?? outfits.length}`,
     `</context>`,
     `<candidate_outfits>`,

@@ -124,7 +124,7 @@ function hardRuleDiff(prev: Item[], next: Item[], looks: Outfit[]): HardRuleResu
 export function useDailyLooks(
   options: { aestheticId?: string; count?: number } = {},
 ): DailyLooks & { refresh: () => void } {
-  const { items, isHydrated, favoriteIds, savedLooks } = useCloset();
+  const { items, isHydrated, favoriteIds, savedLooks, profile } = useCloset();
   const { weather, status: weatherStatus } = useWeather();
   const aestheticId = options.aestheticId ?? "all";
   const count = options.count ?? 3;
@@ -148,7 +148,7 @@ export function useDailyLooks(
     const dateKey = toDateKey();
     // Weather bucket in the key so a meaningful shift refreshes the day's looks.
     const weatherKey = weather ? `${weather.seasonBand}-${Math.round(weather.tempC / 3) * 3}` : "na";
-    const cacheKey = `${PREFERENCE_KEYS.dailyLooks}:${dateKey}:${aestheticId}:${count}:${weatherKey}`;
+    const cacheKey = `${PREFERENCE_KEYS.dailyLooks}:${dateKey}:${aestheticId}:${count}:${weatherKey}:${profile.presentation ?? "unspecified"}`;
     const hash = wardrobeHash(items);
 
     const persist = (looks: Outfit[]) => {
@@ -169,6 +169,7 @@ export function useDailyLooks(
           favoriteIds: [...favoriteIds],
           savedLooks,
           weather: weather ?? undefined,
+          presentation: profile.presentation,
         });
         persist(result.outfits);
         if (active) setState({ looks: result.outfits, status: "ready", refreshedAt: new Date().toISOString(), fromCache: false, suggestions: result.suggestions ?? [] });
@@ -246,7 +247,7 @@ export function useDailyLooks(
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [isHydrated, items, context, nonce, aestheticId, count, favoriteIds, savedLooks, weather, weatherStatus]);
+  }, [isHydrated, items, context, nonce, aestheticId, count, favoriteIds, savedLooks, profile.presentation, weather, weatherStatus]);
 
   const refresh = () => setNonce((value) => value + 1);
   return { ...state, refresh };

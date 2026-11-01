@@ -13,6 +13,7 @@ import type {
   WarmthBand,
   WearEvent,
 } from "@/types/domain";
+import { DEFAULT_WEARER_PRESENTATION, type UserProfileMetadata } from "@/types/domain";
 import { getDatabase, type WardrobeDatabase } from "@/services/storage/database";
 
 export type WardrobeSnapshot = {
@@ -21,6 +22,8 @@ export type WardrobeSnapshot = {
   savedLookIds: string[];
   favoriteIds: string[];
   stylePreferences: string[] | null;
+  /** User profile metadata (presentation etc.) — styles are tailored to it. */
+  profile: UserProfileMetadata;
 };
 
 export const PREFERENCE_KEYS = {
@@ -29,6 +32,7 @@ export const PREFERENCE_KEYS = {
   style: "style_preferences",
   dailyLooks: "daily_looks_v1",
   mockCleanup: "mock_cleanup_v1",
+  profile: "profile_metadata_v1",
 } as const;
 
 const ITEM_COLUMNS = [
@@ -156,7 +160,14 @@ function rowToOutfit(row: OutfitRow): Outfit {
 
 /** In-memory snapshot used when no SQLite driver is available (web / failure). */
 function inMemorySnapshot(): WardrobeSnapshot {
-  return { items: [], outfits: [], savedLookIds: [], favoriteIds: [], stylePreferences: null };
+  return {
+    items: [],
+    outfits: [],
+    savedLookIds: [],
+    favoriteIds: [],
+    stylePreferences: null,
+    profile: { presentation: DEFAULT_WEARER_PRESENTATION },
+  };
 }
 
 /**
@@ -205,6 +216,8 @@ export async function loadWardrobeSnapshot(): Promise<WardrobeSnapshot> {
   const savedLooks = await readPreference(db, PREFERENCE_KEYS.savedLooks);
   const favorites = await readPreference(db, PREFERENCE_KEYS.favorites);
   const style = await readPreference(db, PREFERENCE_KEYS.style);
+  const profileRaw = await readPreference(db, PREFERENCE_KEYS.profile);
+  const profile = profileRaw ? parseJson<UserProfileMetadata>(profileRaw, {}) : {};
 
   return {
     items: itemRows.map(rowToItem),
@@ -212,6 +225,7 @@ export async function loadWardrobeSnapshot(): Promise<WardrobeSnapshot> {
     savedLookIds: parseJson<string[]>(savedLooks, []),
     favoriteIds: parseJson<string[]>(favorites, []),
     stylePreferences: style ? parseJson<string[]>(style, []) : null,
+    profile: { presentation: profile.presentation ?? DEFAULT_WEARER_PRESENTATION },
   };
 }
 
@@ -239,6 +253,11 @@ export async function deleteItem(itemId: string): Promise<void> {
   const db = await getDatabase();
   if (!db) return;
   await db.runAsync("DELETE FROM items WHERE id = ?", itemId);
+}
+
+/** Persist the user's profile metadata (presentation etc.). */
+export async function saveProfileMetadata(profile: UserProfileMetadata): Promise<void> {
+  await writePreference(PREFERENCE_KEYS.profile, JSON.stringify(profile));
 }
 
 export async function writePreference(key: string, value: string): Promise<void> {
