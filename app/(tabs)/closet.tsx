@@ -1,4 +1,4 @@
-import { adaptiveColors, radius, spacing, Button, CircularGlassButton as GlassButton, GlassLayer, ItemImage, NativeSwitch, Screen, SelectionRow, Sheet, WardrobeIcon } from "@/components/ui";
+import { adaptiveColors, radius, spacing, Button, CircularGlassButton as GlassButton, FilterChip, GlassLayer, ItemImage, NativeSwitch, Screen, SelectionRow, Sheet, WardrobeIcon } from "@/components/ui";
 import { aesthetics, categoryLabels, type ClothingCategory, type Item } from "@/data/mock";
 import { priceToNumber } from "@/types/domain";
 import { useCloset } from "@/state/closet-context";
@@ -159,7 +159,7 @@ export default function ClosetScreen() {
         <View style={{ marginHorizontal: -spacing.lg }}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.lg, paddingVertical: 2 }}>
             {categoryFilters.map((filter) => (
-              <Chip
+              <FilterChip
                 key={filter}
                 label={filter === "all" ? "All" : categoryLabels[filter]}
                 count={categoryCounts[filter] ?? 0}

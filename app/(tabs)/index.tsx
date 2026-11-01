@@ -1,4 +1,4 @@
-import { adaptiveColors, Card, GlassButton, GlassLayer, NativePicker, Screen, WardrobeIcon } from "@/components/ui";
+import { adaptiveColors, Card, FilterChip, GlassButton, GlassLayer, Screen, spacing, WardrobeIcon } from "@/components/ui";
 import { type Item } from "@/data/mock";
 import { itemImageSource } from "@/services/item-image";
 import { useCloset } from "@/state/closet-context";
@@ -8,7 +8,7 @@ import { SymbolView } from "expo-symbols";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 
 const quickAestheticIds = ["all", "minimal", "clean-girl", "old-money", "office"];
 const quickAestheticLabels = ["All", "Minimal", "Clean girl", "Old money", "Office"];
@@ -24,7 +24,13 @@ export default function HomeScreen() {
         <HomeHeader />
         <AskCard />
 
-        <NativePicker value={selectedAestheticId} onValueChange={setSelectedAestheticId} options={quickAestheticIds.map((value, index) => ({ value, label: quickAestheticLabels[index] }))} label="Outfit aesthetic" />
+        <View style={{ marginHorizontal: -spacing.lg }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.lg, paddingVertical: 2 }}>
+            {quickAestheticIds.map((value, index) => (
+              <FilterChip key={value} label={quickAestheticLabels[index]} selected={selectedAestheticId === value} onPress={() => setSelectedAestheticId(value)} />
+            ))}
+          </ScrollView>
+        </View>
       </View>
 
       <View className="gap-4">
