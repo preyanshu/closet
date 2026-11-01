@@ -8,17 +8,17 @@ import { itemImageSource } from "@/services/item-image";
 import { useLocalSearchParams } from "expo-router";
 import { ScrollView, Text, View } from "react-native";
 
-type DetailOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" };
+type DetailOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" | "recommended" };
 
 type LookItemRef = { itemId: string; role?: ItemRole; layerOrder?: number };
 
 export default function LookDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, look } = useLocalSearchParams<{ id: string; look?: string }>();
   const { items, myLooks, savedLooks } = useCloset();
 
   const savedLooksOut: DetailOutfit[] = savedLooks.map((outfit) => ({ ...outfit, source: "saved" }));
   const customLooks: DetailOutfit[] = myLooks.map((outfit) => ({ ...outfit, source: "mine" }));
-  const outfit = [...savedLooksOut, ...customLooks].find((look) => look.id === id);
+  const outfit = parsePassedLook(look) ?? [...savedLooksOut, ...customLooks].find((entry) => entry.id === id);
   const outfitItems = resolveOutfitItems(outfit, items);
 
   if (!outfit) {
@@ -29,7 +29,7 @@ export default function LookDetailScreen() {
     );
   }
 
-  const sourceLabel = outfit.source === "mine" ? "Custom" : "Saved";
+  const sourceLabel = outfit.source === "mine" ? "Custom" : outfit.source === "saved" ? "Saved" : "Today's pick";
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: adaptiveColors.canvas }} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ gap: 24, paddingHorizontal: 24, paddingBottom: 88, paddingTop: 20 }}>
@@ -82,6 +82,18 @@ function InfoChip({ label, small = false }: { label: string; small?: boolean }) 
       <Text style={{ fontSize: small ? 10 : 11, fontWeight: "800", color: "rgba(0,0,0,0.44)" }}>{label}</Text>
     </View>
   );
+}
+
+function parsePassedLook(value: string | string[] | undefined): DetailOutfit | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as DetailOutfit;
+    if (!parsed || typeof parsed.id !== "string" || typeof parsed.label !== "string" || !Array.isArray(parsed.itemIds)) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
 }
 
 function formatTag(value: string) {

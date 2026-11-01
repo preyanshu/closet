@@ -15,7 +15,7 @@ const quickAestheticLabels = ["All", "Minimal", "Clean girl", "Old money", "Offi
 
 export default function HomeScreen() {
   const [selectedAestheticId, setSelectedAestheticId] = useState<string>("all");
-  const { items, myLooks, isSavedLook, toggleSavedLook } = useCloset();
+  const { items, isSavedLook, toggleSavedLook } = useCloset();
   const { looks: outfits, status, error, refresh, refreshing, suggestions } = useDailyLooks({ aestheticId: selectedAestheticId, count: 3 });
 
   return (
@@ -109,71 +109,53 @@ export default function HomeScreen() {
           const saved = isSavedLook(outfit.id);
 
           return (
-            <Card key={outfit.id} className="gap-3.5 rounded-[20px] p-3.5">
-              <View className="gap-1 px-0.5">
-                <Text className="text-[17px] font-bold tracking-[-0.3px] text-black dark:text-[#FFF9ED]">{outfit.label}</Text>
-                <Text numberOfLines={2} className="text-xs font-medium text-black/45 dark:text-white/45">{outfit.description}</Text>
-              </View>
+            <Pressable
+              key={outfit.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${outfit.label}`}
+              onPress={() => router.push({ pathname: "/look/[id]", params: { id: outfit.id, look: JSON.stringify(outfit) } })}
+              className="active:scale-[0.99]"
+            >
+              <Card className="gap-3 rounded-[18px] p-3">
+                <View className="gap-0.5 px-0.5">
+                  <Text className="text-[16px] font-bold tracking-[-0.2px] text-black dark:text-[#FFF9ED]">{outfit.label}</Text>
+                  <Text numberOfLines={2} className="text-[11px] font-medium leading-4 text-black/45 dark:text-white/45">{outfit.description}</Text>
+                </View>
 
-              <LookCollage items={outfitItems} />
+                <LookCollage items={outfitItems} />
 
-              <View className="flex-row items-center justify-between px-0.5 pt-0.5">
-                <Text className="text-[11px] font-semibold uppercase tracking-[1.3px] text-black/38 dark:text-white/38">{outfitItems.length} pieces</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={saved ? "Remove from outfits" : "Add to outfits"}
-                  onPress={() => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    toggleSavedLook(outfit.id, outfit);
-                  }}
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 6,
-                    paddingHorizontal: 14,
-                    paddingVertical: 8,
-                    borderRadius: 999,
-                    backgroundColor: saved ? adaptiveColors.accentSoft : adaptiveColors.label,
-                  }}
-                  className="active:scale-[0.96]"
-                >
-                  <WardrobeIcon name={saved ? "checkmark" : "plus"} color={saved ? adaptiveColors.accent : adaptiveColors.onAccent} size={13} />
-                  <Text style={{ fontSize: 12, lineHeight: 16, fontWeight: "700", color: saved ? adaptiveColors.accent : adaptiveColors.onAccent }}>
-                    {saved ? "Added to outfits" : "Add to outfits"}
-                  </Text>
-                </Pressable>
-              </View>
-            </Card>
+                <View className="flex-row items-center justify-between px-0.5">
+                  <Text className="text-[10px] font-semibold uppercase tracking-[1.3px] text-black/38 dark:text-white/38">{outfitItems.length} pieces</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={saved ? "Remove from outfits" : "Add to outfits"}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      toggleSavedLook(outfit.id, outfit);
+                    }}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 5,
+                      paddingHorizontal: 12,
+                      paddingVertical: 7,
+                      borderRadius: 999,
+                      backgroundColor: saved ? adaptiveColors.accentSoft : adaptiveColors.label,
+                    }}
+                    className="active:scale-[0.96]"
+                  >
+                    <WardrobeIcon name={saved ? "checkmark" : "plus"} color={saved ? adaptiveColors.accent : adaptiveColors.onAccent} size={12} />
+                    <Text style={{ fontSize: 11, lineHeight: 15, fontWeight: "700", color: saved ? adaptiveColors.accent : adaptiveColors.onAccent }}>
+                      {saved ? "Added to outfits" : "Add to outfits"}
+                    </Text>
+                  </Pressable>
+                </View>
+              </Card>
+            </Pressable>
           );
         })}
       </View>
 
-      {myLooks.length > 0 && (
-        <View className="gap-3">
-          <View className="flex-row items-center justify-between">
-            <Text className="text-xs font-bold uppercase tracking-[2px] text-black/40 dark:text-white/40">My looks</Text>
-            <View className="px-2.5 py-1 rounded-full bg-black/[0.06]">
-              <Text className="text-[11px] font-bold uppercase tracking-[1px] text-black/40 dark:text-white/40">Custom</Text>
-            </View>
-          </View>
-
-          <View className="gap-4">
-            {myLooks.map((look) => (
-              <Card key={look.id} className="gap-3 rounded-[18px] p-4">
-                <View className="flex-row items-center justify-between">
-                  <View className="flex-1 gap-1">
-                    <Text className="text-[15px] font-bold text-black dark:text-[#FFF9ED]">{look.label}</Text>
-                    <Text className="text-xs text-black/45 dark:text-white/45">{look.itemIds.length} pieces · {look.description}</Text>
-                  </View>
-                  <View className="px-2 py-1 rounded-full bg-black/[0.06]">
-                    <Text className="text-[10px] font-bold uppercase tracking-[1px] text-black/35 dark:text-white/35">Custom</Text>
-                  </View>
-                </View>
-              </Card>
-            ))}
-          </View>
-        </View>
-      )}
     </Screen>
   );
 }
@@ -218,14 +200,14 @@ function AskCard() {
 function LookCollage({ items }: { items: Item[] }) {
   const previews = items.slice(0, 4);
   return (
-    <View style={{ flexDirection: "row", gap: 6 }}>
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>
       {previews.map((item) => (
         <View
           key={item.id}
           style={{
-            flex: 1,
-            height: 150,
-            borderRadius: 14,
+            width: "48.5%",
+            height: 122,
+            borderRadius: 12,
             overflow: "hidden",
             backgroundColor: adaptiveColors.surfaceMuted,
             borderWidth: 1,

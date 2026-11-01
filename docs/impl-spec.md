@@ -287,8 +287,11 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
 - Explicit ↻ (`refresh()`) forces a restyle; old looks stay visible and the small button spins.
   AI failure with cached looks is silent for automatic runs and reported for manual ones; with
   no looks it surfaces an error. We never substitute rules-engine output.
-- **Home cards are minimal**: a collage of the look's real pieces, its label/description, and a
-  single **Add to outfits** pill (tap again to remove). No like/share/"I wore this" row.
+- **Home cards are minimal**: a compact two-column collage of the look's real pieces, its
+  label/description, and a single **Add to outfits** pill (tap again to remove). No like/share/
+  "I wore this" row, and no custom "My looks" section — Home only shows that day's AI looks.
+  Tapping a card opens the look-detail modal; the not-yet-saved daily look is passed through the
+  route params so it renders even though it isn't in the outfit library.
 - **Too few pieces** is a normal cached result: `ready` with zero looks + `suggestions`
   (stored too, so it isn't recomputed all day); Home shows "Not quite enough to style yet" with
   add-to-closet hints, and chat folds the hints into its reply.
