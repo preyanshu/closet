@@ -1,14 +1,15 @@
 import { adaptiveColors, radius, GlassButton, GlassLayer, ItemImage, ModalHeader } from "@/components/ui";
 import type { Outfit } from "@/data/mock";
-import { parseStylingPrompt, shouldAskToNarrowDown, decideRetryDirection } from "@/services/decision";
-import { CHAT_SYSTEM } from "@/services/stylist-agent";
-import { composeOutfitsAI, type Occasion } from "@/services/outfit-engine";
+import { decideRetryDirection } from "@/services/decision";
+import { CHAT_SYSTEM, type AgentProgressEvent } from "@/services/stylist-agent";
+import { chatWithAlta, type Occasion } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
 import { useWeather } from "@/state/use-weather";
 import { SymbolView } from "expo-symbols";
 import * as Haptics from "expo-haptics";
 import { useState, useRef, useEffect } from "react";
 import {
+  ActivityIndicator,
   View,
   Text,
   TextInput,
@@ -19,47 +20,35 @@ import {
   type ScrollViewInstance,
 } from "react-native";
 
+type ChatStep = {
+  id: string;
+  label: string;
+  detail?: string;
+  summary?: string;
+  state: "running" | "done";
+};
+
 type ChatMessage = {
   id: string;
   role: "user" | "alta";
   text: string;
   outfits?: Outfit[];
-  kind?: "text" | "narrow" | "error";
+  steps?: ChatStep[];
+  streaming?: boolean;
+  kind?: "text" | "error";
   originalPrompt?: string;
   rejected?: string[];
   failedRetry?: boolean;
 };
 
-const initialMessages: ChatMessage[] = [
-  {
-    id: "1",
-    role: "alta",
-    text: "Hey! I'm Alta, your personal stylist. What's the occasion tonight?",
-  },
-];
-
 const quickReplies = ["Dinner out", "Date night", "Casual hangout", "Work event"];
 
-const TRIVIAL_REPLY =
-  "I'm all about outfits — tell me where you're headed and how dressy you want to be, and I'll pull looks straight from your closet.";
-
-/** Fold "add these pieces" hints into the chat reply when no look is possible. */
-function withSuggestions(
-  reply: string | undefined,
-  suggestions: Array<{ label: string; hint: string }> | undefined,
-): string | undefined {
-  if (!suggestions?.length) return reply;
-  const list = suggestions.map((s) => `${s.label.toLowerCase()} (${s.hint})`).join(", ");
-  return `${reply ?? "I need a few more pieces before I can build a full look."}\n\nAdd ${list} and I'll style it.`;
-}
-
 export default function ChatScreen() {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [rejected, setRejected] = useState<string[]>([]);
   const rejectedRef = useRef<Array<{ label: string; itemIds: string[] }>>([]);
-  const retryCountRef = useRef(0);
   const scrollRef = useRef<ScrollViewInstance>(null);
   const { items, favoriteIds, savedLooks, toggleSavedLook, profile } = useCloset();
   const { weather } = useWeather();
@@ -70,13 +59,81 @@ export default function ChatScreen() {
 
   const history = () =>
     messages
-      .filter((m) => m.text)
+      .filter((m) => m.text || m.outfits?.length)
       .map((m) => ({
         role: m.role === "alta" ? "assistant" : "user",
         content: m.outfits?.length
           ? `${m.text}\nOutfits proposed: ${m.outfits.map((o) => `${o.label} (${o.itemIds.join(",")})`).join("; ")}`
           : m.text,
       }));
+
+  const beginDraft = (originalPrompt: string) => {
+    const draftId = `${Date.now()}-a`;
+    let pending = "";
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const flush = () => {
+      if (!pending) return;
+      const chunk = pending;
+      pending = "";
+      setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: m.text + chunk } : m)));
+    };
+    const stop = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      flush();
+    };
+
+    setMessages((prev) => [...prev, { id: draftId, role: "alta", text: "", steps: [], streaming: true, originalPrompt }]);
+
+    const onEvent = (event: AgentProgressEvent) => {
+      if (event.type === "text_delta") {
+        pending += event.text;
+        if (!timer) {
+          timer = setTimeout(() => { timer = null; flush(); }, 40);
+        }
+        return;
+      }
+      if (event.type === "tool_call") {
+        const step: ChatStep = {
+          id: `${draftId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          label: event.label,
+          detail: event.detail,
+          state: "running",
+        };
+        setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, steps: [...(m.steps ?? []), step] } : m)));
+        return;
+      }
+      setMessages((prev) => prev.map((m) => {
+        if (m.id !== draftId) return m;
+        const steps = [...(m.steps ?? [])];
+        for (let i = steps.length - 1; i >= 0; i -= 1) {
+          if (steps[i].state === "running") {
+            steps[i] = { ...steps[i], state: "done", summary: event.summary };
+            break;
+          }
+        }
+        return { ...m, steps };
+      }));
+    };
+
+    const complete = (result: { reply: string; outfits: Outfit[] }) => {
+      stop();
+      setMessages((prev) => prev.map((m) => (m.id === draftId ? {
+        ...m,
+        text: result.reply,
+        outfits: result.outfits.length > 0 ? result.outfits : undefined,
+        streaming: false,
+      } : m)));
+    };
+
+    const fail = () => {
+      stop();
+      setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: "", steps: [], kind: "error", streaming: false } : m)));
+    };
+
+    return { onEvent, complete, fail };
+  };
 
   const send = async (text?: string) => {
     const body = (text ?? input).trim();
@@ -87,30 +144,13 @@ export default function ChatScreen() {
     setInput("");
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     rejectedRef.current = [];
-    retryCountRef.current = 0;
     setRejected([]);
 
+    const draft = beginDraft(body);
     setBusy(true);
     try {
-      // Trivial-chat gate: one cheap Clef call decides chit-chat vs styling.
-      let isStyling = true;
-      try {
-        const parsed = await parseStylingPrompt(body);
-        isStyling = parsed.isStylingRequest;
-      } catch {
-        isStyling = true; // gate unavailable → treat as styling
-      }
-
-      if (!isStyling) {
-        setMessages((prev) => [...prev, { id: `${Date.now()}-a`, role: "alta", text: TRIVIAL_REPLY, originalPrompt: body }]);
-        return;
-      }
-
-      const result = await composeOutfitsAI(
-        {
-          occasion: pickOccasion(body),
-          count: 2,
-        },
+      const result = await chatWithAlta(
+        { occasion: pickOccasion(body), count: 3 },
         items,
         {
           favoriteIds: [...favoriteIds],
@@ -120,32 +160,46 @@ export default function ChatScreen() {
           history: history(),
           weather: weather ?? undefined,
           presentation: profile.presentation,
+          onEvent: draft.onEvent,
         },
       );
 
+      if (!result.reply && result.outfits.length === 0) throw new Error("Empty reply");
+      draft.complete(result);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `${Date.now()}-a`,
-          role: "alta",
-          text: withSuggestions(result.reply, result.suggestions) ?? "Here's what I'd pull from your closet.",
-          outfits: result.outfits,
-          originalPrompt: body,
-        },
-      ]);
     } catch {
+      draft.fail();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setMessages((prev) => [
-        ...prev,
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const retryAnswer = async (originalPrompt: string) => {
+    if (busy || !originalPrompt) return;
+    const draft = beginDraft(originalPrompt);
+    setBusy(true);
+    try {
+      const result = await chatWithAlta(
+        { occasion: pickOccasion(originalPrompt), count: 3 },
+        items,
         {
-          id: `${Date.now()}-e`,
-          role: "alta",
-          text: "Styling hiccup — I couldn't reach the stylist just now.",
-          kind: "error",
-          originalPrompt: body,
+          favoriteIds: [...favoriteIds],
+          savedLooks,
+          userRequest: originalPrompt,
+          system: CHAT_SYSTEM,
+          history: history(),
+          weather: weather ?? undefined,
+          presentation: profile.presentation,
+          onEvent: draft.onEvent,
         },
-      ]);
+      );
+      if (!result.reply && result.outfits.length === 0) throw new Error("Empty reply");
+      draft.complete(result);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      draft.fail();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setBusy(false);
     }
@@ -153,24 +207,9 @@ export default function ChatScreen() {
 
   const retry = async (originalPrompt: string) => {
     if (busy || !originalPrompt) return;
+    const draft = beginDraft(originalPrompt);
     setBusy(true);
     try {
-      // Courtesy gate: after a few try-agains, ask instead of burning sessions.
-      const shouldNarrow = await shouldAskToNarrowDown(retryCountRef.current, originalPrompt).catch(() => retryCountRef.current >= 3);
-      if (shouldNarrow) {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `${Date.now()}-n`,
-            role: "alta",
-            text: "Before I try again — can you narrow it down a little? Occasion, vibe, or how dressy you're feeling.",
-            kind: "narrow",
-          },
-        ]);
-        return;
-      }
-
       let direction: string | undefined;
       if (rejectedRef.current.length > 0) {
         direction = await decideRetryDirection(
@@ -187,45 +226,28 @@ export default function ChatScreen() {
         direction ? `Propose VISIBLY DIFFERENT outfits, pushing in this direction: ${direction}.` : "",
       ].filter(Boolean).join(" ");
 
-      const result = await composeOutfitsAI(
-        { occasion: pickOccasion(originalPrompt), count: 2 },
+      const result = await chatWithAlta(
+        { occasion: pickOccasion(originalPrompt), count: 3 },
         items,
         {
           favoriteIds: [...favoriteIds],
           savedLooks,
-          userRequest: `${originalPrompt}\n${seed}`,
-          system: CHAT_SYSTEM,
+          userRequest: `${originalPrompt}\n${seed}\nThe user explicitly wants a fresh set of outfit options now.`,
+          system: `${CHAT_SYSTEM}\n\nFor this turn the user explicitly wants another set of outfit options — include outfit cards using the <<<OUTFITS>>> marker.`,
           history: history(),
           weather: weather ?? undefined,
           presentation: profile.presentation,
+          onEvent: draft.onEvent,
         },
       );
 
-      retryCountRef.current += 1;
+      if (result.outfits.length === 0) throw new Error("No new outfits");
+      draft.complete(result);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setRejected([]);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `${Date.now()}-a`,
-          role: "alta",
-          text: withSuggestions(result.reply, result.suggestions) ?? "Fair — try these instead.",
-          outfits: result.outfits,
-          originalPrompt,
-        },
-      ]);
     } catch {
+      draft.fail();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `${Date.now()}-e`,
-          role: "alta",
-          text: "Styling hiccup — I couldn't reach the stylist just now.",
-          kind: "error",
-          originalPrompt,
-        },
-      ]);
     } finally {
       setBusy(false);
     }
@@ -248,7 +270,7 @@ export default function ChatScreen() {
       style={{ flex: 1, backgroundColor: adaptiveColors.canvas }}
     >
       <View style={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 }}>
-        <ModalHeader title="Ask Alta" subtitle="Get help styling your closet." />
+        <ModalHeader title="Ask Alta" subtitle="Ask anything about your wardrobe." />
       </View>
       <ScrollView
         ref={scrollRef}
@@ -256,9 +278,17 @@ export default function ChatScreen() {
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
       >
+        {messages.length === 0 && (
+          <View style={{ gap: 8, paddingTop: 4 }}>
+            <Text style={{ fontSize: 24, lineHeight: 29, fontWeight: "800", letterSpacing: -0.6, color: adaptiveColors.label }}>What are we wearing?</Text>
+            <Text style={{ fontSize: 14, lineHeight: 20, fontWeight: "500", color: adaptiveColors.secondaryLabel }}>Ask about a piece, an occasion, or what your closet is missing.</Text>
+          </View>
+        )}
         {messages.map((msg) => (
           <View key={msg.id} style={{ gap: 8 }}>
-            <Bubble role={msg.role} text={msg.text} />
+            {msg.steps?.length ? <ActivityFeed steps={msg.steps} /> : null}
+            {msg.streaming && !msg.text && !msg.steps?.length ? <ThinkingRow /> : null}
+            {msg.text ? <Bubble role={msg.role} text={msg.streaming ? `${msg.text}▍` : msg.text} /> : null}
             {msg.outfits?.map((outfit) => (
               <OutfitCard
                 key={outfit.id}
@@ -298,7 +328,9 @@ export default function ChatScreen() {
             ) : null}
             {msg.kind === "error" && msg.originalPrompt ? (
               <Pressable
-                onPress={() => retry(msg.originalPrompt ?? "")}
+                accessibilityRole="button"
+                accessibilityLabel="Retry"
+                onPress={() => retryAnswer(msg.originalPrompt ?? "")}
                 disabled={busy}
                 style={{
                   alignSelf: "flex-start",
@@ -318,18 +350,9 @@ export default function ChatScreen() {
             ) : null}
           </View>
         ))}
-
-        {busy && (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start" }}>
-            <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: "rgba(0,0,0,0.05)", alignItems: "center", justifyContent: "center" }}>
-              <SymbolView name="sparkles" tintColor="rgba(0,0,0,0.45)" style={{ width: 15, height: 15 }} />
-            </View>
-            <Text style={{ fontSize: 13, fontWeight: "600", color: "rgba(0,0,0,0.4)" }}>Styling…</Text>
-          </View>
-        )}
       </ScrollView>
 
-      {messages.length <= 2 && !busy && (
+      {messages.length === 0 && !busy && (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 20, paddingBottom: 10 }}>
           {quickReplies.map((reply) => (
             <Pressable
@@ -397,6 +420,36 @@ function pickOccasion(text: string): Occasion {
   if (lower.includes("travel") || lower.includes("flight") || lower.includes("trip")) return "travel";
   if (lower.includes("casual") || lower.includes("hangout") || lower.includes("errand")) return "casual";
   return "everyday";
+}
+
+function ActivityFeed({ steps }: { steps: ChatStep[] }) {
+  return (
+    <View style={{ alignSelf: "flex-start", gap: 6, paddingLeft: 2 }}>
+      {steps.map((step) => (
+        <View key={step.id} style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+          {step.state === "running"
+            ? <ActivityIndicator size="small" color={adaptiveColors.tertiaryLabel} />
+            : <SymbolView name="checkmark.circle.fill" tintColor={adaptiveColors.tertiaryLabel} style={{ width: 13, height: 13 }} />}
+          <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>
+            {step.label}
+            {step.detail ? ` · ${step.detail}` : ""}
+            {step.summary ? ` — ${step.summary}` : ""}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function ThinkingRow() {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start" }}>
+      <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: adaptiveColors.surfaceMuted, alignItems: "center", justifyContent: "center" }}>
+        <SymbolView name="sparkles" tintColor={adaptiveColors.tertiaryLabel} style={{ width: 15, height: 15 }} />
+      </View>
+      <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>Thinking…</Text>
+    </View>
+  );
 }
 
 function Bubble({ role, text }: { role: "user" | "alta"; text: string }) {

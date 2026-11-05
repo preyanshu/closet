@@ -137,6 +137,149 @@ app.post("/v1/stage", async (c) => {
 });
 
 /**
+ * Streaming variant of /v1/style/turn. Uses Cloudflare's OpenAI-compatible
+ * chat endpoint so text arrives token-by-token. Normalizes the upstream SSE
+ * into our own events:
+ *   event: delta       data: { text }
+ *   event: tool_calls  data: { tool_calls: [{ id, name, arguments }] }
+ *   event: done        data: {}
+ *   event: error       data: { error }
+ * Tool-call arguments arrive as fragments, so they are accumulated by index
+ * and only emitted once the model finishes.
+ */
+app.post("/v1/style/stream", async (c) => {
+  const creds = credentials(c.env);
+  if (!creds) return c.json({ error: "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not configured" }, 500);
+
+  const body = await c.req.json().catch(() => null);
+  const messages = Array.isArray(body?.messages) ? body.messages : null;
+  const tools = Array.isArray(body?.tools) ? body.tools : null;
+  if (!messages || messages.length === 0) return c.json({ error: "body.messages must be a non-empty array" }, 400);
+  if (!tools || tools.length === 0) return c.json({ error: "body.tools must be a non-empty array" }, 400);
+  if (messages.length > 400) return c.json({ error: `body.messages up to 400; received ${messages.length}` }, 400);
+
+  const model = c.env.STYLE_MODEL || DEFAULT_MODELS.style;
+  const upstream = await fetch(aiChatCompletionsUrl(creds.accountId), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${creds.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages,
+      tools,
+      max_tokens: Math.min(2000, Math.max(200, Number(body?.max_tokens ?? 1200))),
+      temperature: Math.min(1.5, Math.max(0, Number(body?.temperature ?? 0.8))),
+      stream: true,
+    }),
+  });
+
+  if (!upstream.ok || !upstream.body) {
+    const data = await readJson(upstream).catch(() => null);
+    logUsage("style.stream", model, data);
+    return c.json({ error: describeError(data, upstream.status) }, 502);
+  }
+
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: string, data: unknown) =>
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      const calls = new Map<number, { id: string; name: string; args: string }>();
+      let lastUsage: unknown = null;
+      let buffer = "";
+      let finished = false;
+
+      const handleLine = (line: string) => {
+        if (!line.startsWith("data:")) return;
+        const payload = line.slice(5).trim();
+        if (!payload) return;
+        if (payload === "[DONE]") {
+          finished = true;
+          return;
+        }
+        let chunk: any;
+        try {
+          chunk = JSON.parse(payload);
+        } catch {
+          return;
+        }
+        if (chunk?.usage) lastUsage = chunk.usage;
+        const delta = chunk?.choices?.[0]?.delta;
+        if (typeof delta?.content === "string" && delta.content) {
+          send("delta", { text: delta.content });
+        } else if (Array.isArray(delta?.content)) {
+          const text = delta.content.length === 0
+            ? "[]"
+            : delta.content
+              .map((part: any) => typeof part === "string" ? part : typeof part?.text === "string" ? part.text : JSON.stringify(part))
+              .join("");
+          if (text) send("delta", { text });
+        }
+        if (Array.isArray(delta?.tool_calls)) {
+          for (const call of delta.tool_calls) {
+            const index = Number(call?.index ?? 0);
+            const entry = calls.get(index) ?? { id: "", name: "", args: "" };
+            if (typeof call?.id === "string" && call.id) entry.id = call.id;
+            if (typeof call?.function?.name === "string" && call.function.name) entry.name = call.function.name;
+            if (typeof call?.function?.arguments === "string") entry.args += call.function.arguments;
+            calls.set(index, entry);
+          }
+        }
+      };
+
+      try {
+        const reader = upstream.body!.getReader();
+        while (!finished) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let newline = buffer.indexOf("\n");
+          while (newline >= 0) {
+            const line = buffer.slice(0, newline).trim();
+            buffer = buffer.slice(newline + 1);
+            if (line) handleLine(line);
+            if (finished) break;
+            newline = buffer.indexOf("\n");
+          }
+        }
+        if (buffer.trim()) handleLine(buffer.trim());
+        reader.releaseLock();
+
+        if (calls.size > 0) {
+          const toolCalls = [...calls.entries()].map(([index, entry]) => {
+            let args: Record<string, unknown> = {};
+            try {
+              args = entry.args ? (JSON.parse(entry.args) as Record<string, unknown>) : {};
+            } catch {
+              args = {};
+            }
+            return { id: entry.id || `call_${index}`, name: entry.name, arguments: args };
+          }).filter((call) => call.name);
+          if (toolCalls.length > 0) send("tool_calls", { tool_calls: toolCalls });
+        }
+        logUsage("style.stream", model, { result: { usage: lastUsage } });
+        send("done", {});
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "stream failed";
+        try { send("error", { error: message }); } catch { /* client disconnected */ }
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+});
+
+/**
  * Thin stateless proxy for one turn of the client-side stylist agent loop.
  * Body: { messages, tools, max_tokens? }. The client owns the persona, the
  * tools (executed locally against the wardrobe DB), and the loop. This worker
@@ -227,6 +370,10 @@ function credentials(env: Env): { accountId: string; token: string } | null {
 
 function aiRunUrl(accountId: string, model: string): string {
   return `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
+}
+
+function aiChatCompletionsUrl(accountId: string): string {
+  return `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1/chat/completions`;
 }
 
 async function readJson(response: Response): Promise<any> {

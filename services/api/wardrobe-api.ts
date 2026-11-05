@@ -123,6 +123,74 @@ export async function runStyleTurn(
   throw new WardrobeApiError("Stylist turn returned neither tool_calls nor text.");
 }
 
+/** Streaming turn: text deltas arrive live; tool calls are returned at the end. */
+export async function runStyleTurnStream(
+  messages: Array<Record<string, unknown>>,
+  tools: Array<Record<string, unknown>>,
+  maxTokens: number | undefined,
+  temperature: number | undefined,
+  onDelta: (text: string) => void,
+): Promise<StyleTurnResult> {
+  if (!isWardrobeApiConfigured()) {
+    throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
+  }
+  const response = await post("/v1/style/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages, tools, max_tokens: maxTokens ?? 1200, temperature: temperature ?? 0.8 }),
+  });
+  if (response.status !== 200 || !response.body) {
+    const text = await response.text().catch(() => "");
+    throw new WardrobeApiError(`Stylist stream failed (${response.status}): ${text.slice(0, 200)}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  let toolCalls: StyleToolCall[] | undefined;
+
+  const handleBlock = (block: string) => {
+    let event = "message";
+    let data = "";
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data += line.slice(5).trim();
+    }
+    if (!data) return;
+    const payload = parseJson(data);
+    if (event === "delta" && typeof payload.text === "string") {
+      text += payload.text;
+      onDelta(payload.text);
+    } else if (event === "tool_calls" && Array.isArray(payload.tool_calls)) {
+      toolCalls = payload.tool_calls as StyleToolCall[];
+    } else if (event === "error") {
+      throw new WardrobeApiError(typeof payload.error === "string" ? payload.error : "Stylist stream failed.");
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        handleBlock(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+    if (buffer.trim()) handleBlock(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (toolCalls && toolCalls.length > 0) return { tool_calls: toolCalls };
+  if (text) return { text };
+  throw new WardrobeApiError("Stylist stream returned neither tool_calls nor text.");
+}
+
 // ── Decision model (Clef-flash / System One) ─────────────────────────────────
 
 export type SystemOneQuestion = {

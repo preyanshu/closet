@@ -1,7 +1,7 @@
 import type { Item, Outfit } from "@/data/mock";
 import { describeWeather, type WeatherSummary } from "@/services/weather";
 import type { WearerPresentation } from "@/types/domain";
-import { runStyleTurn, WardrobeApiError } from "@/services/api/wardrobe-api";
+import { runStyleTurn, runStyleTurnStream, WardrobeApiError } from "@/services/api/wardrobe-api";
 
 function isEligible(item: Item): boolean {
   return item.lifecycleStatus === "owned" && item.availabilityStatus === "available" && item.processingStatus !== "failed";
@@ -362,6 +362,17 @@ function reviveItems(value: unknown): string[] {
   return [];
 }
 
+/** Best-effort "reply" string from a malformed JSON envelope. */
+function extractReplyLoose(text: string): string | undefined {
+  const match = /"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
+  if (!match) return undefined;
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return match[1];
+  }
+}
+
 /**
  * Salvage complete outfit objects from malformed JSON — models occasionally
  * close the last look with `]` instead of `}`. We scan balanced brace pairs
@@ -405,16 +416,7 @@ function extractOutfitsLoose(text: string): { reply?: string; outfits: Array<{ i
     }
   }
   if (found.size === 0) return null;
-  const replyMatch = /"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
-  let reply: string | undefined;
-  if (replyMatch) {
-    try {
-      reply = JSON.parse(`"${replyMatch[1]}"`);
-    } catch {
-      reply = replyMatch[1];
-    }
-  }
-  return { reply, outfits: [...found.values()] };
+  return { reply: extractReplyLoose(text), outfits: [...found.values()] };
 }
 
 export type RawStyleOutfit = { items: string[]; label: string; reason: string };
@@ -450,9 +452,432 @@ When ready, reply with ONLY valid JSON (no prose, no fences):
 {"reply":"One or two sentences of stylist reasoning for the user.","outfits":[{"items":["id","id"],"label":"Short label","reason":"One grounded sentence."}]}
 The label and reason must describe only the pieces actually listed in that look's "items" — never name a garment you did not include. Ground every claim in attributes you actually saw.`;
 
-export const CHAT_SYSTEM = `${STYLIST_SYSTEM}
+function parseLooseJsonOutfits(text: string): Array<{ items: string[]; label: string; reason: string }> {
+  const outfits: Array<{ items: string[]; label: string; reason: string }> = [];
+  const blocks = text.matchAll(/"?items"?\s*:\s*\[([^\]]*)\]([\s\S]*?)(?="?items"?\s*:|$)/gi);
+  for (const block of blocks) {
+    const items = block[1]
+      .split(/,\s*/)
+      .map((id) => id.replace(/^[\s"'`\[]+|[\s"'`\]]+$/g, ""))
+      .filter(Boolean);
+    if (items.length === 0) continue;
+    const label = /"?label"?\s*:\s*"?([^",}\n]+)/i.exec(block[2])?.[1]?.trim() ?? "Styled look";
+    const reason = /"?reason"?\s*:\s*"?([^"}\n]+)/i.exec(block[2])?.[1]?.trim() ?? "";
+    outfits.push({ items, label, reason });
+  }
+  return outfits;
+}
 
-You are in a chat conversation. Keep "reply" conversational and under two sentences — it will be shown as a chat bubble above the outfit cards. Respond to follow-ups ("more casual", "swap the shoes") using the conversation history and the tools. If the user rejected a previous look, make the new one visibly different (palette, silhouette, formality, or hero piece).`;
+function isOutfitLine(line: string): boolean {
+  const parts = line.trim().replace(/^[-*•]\s*/, "").split("|").map((part) => part.trim());
+  if (parts.length < 2) return false;
+  const items = parts[0]
+    .replace(/^\[/, "")
+    .replace(/\]$/, "")
+    .split(/,\s*/)
+    .map((id) => id.replace(/^["'`\s]+|["'`\s]+$/g, ""))
+    .filter(Boolean);
+  return items.length >= 2 && items.some((id) => /^scan-/i.test(id));
+}
+
+function parseOutfitLines(text: string): Array<{ items: string[]; label: string; reason: string }> {
+  const outfits: Array<{ items: string[]; label: string; reason: string }> = [];
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim().replace(/^[-*•]\s*/, "");
+    if (!line || line.startsWith("[") || line.startsWith("{")) continue;
+    const parts = line.split("|").map((part) => part.trim());
+    if (parts.length < 2) continue;
+    const items = parts[0]
+      .replace(/^\[/, "")
+      .replace(/\]$/, "")
+      .split(/,\s*/)
+      .map((id) => id.replace(/^["'`\s]+|["'`\s]+$/g, ""))
+      .filter(Boolean);
+    if (items.length === 0) continue;
+    outfits.push({ items, label: parts[1], reason: parts[2] ?? "" });
+  }
+  return outfits;
+}
+
+function cleanReply(value: string): string {
+  return value.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function parseChatPayload(text: string): { reply: string; outfits: Array<{ items?: string[]; label?: string; reason?: string }> } {
+  const markerIndex = text.indexOf(OUTFIT_MARKER);
+  if (markerIndex >= 0) {
+    const reply = text.slice(0, markerIndex).trim();
+    const tail = text.slice(markerIndex + OUTFIT_MARKER.length).trim();
+    const parsed = parseJsonPayload(tail);
+    let outfits: Array<{ items?: string[]; label?: string; reason?: string }> = Array.isArray(parsed)
+      ? parsed
+      : parsed && Array.isArray(parsed.outfits)
+        ? parsed.outfits
+        : [];
+    if (outfits.length === 0) outfits = parseOutfitLines(tail);
+    if (outfits.length === 0) outfits = parseLooseJsonOutfits(tail);
+    return { reply: cleanReply(reply), outfits };
+  }
+
+  const parsed = parseJsonPayload(text);
+  if (parsed && (typeof parsed.reply === "string" || Array.isArray(parsed.outfits))) {
+    return { reply: cleanReply(typeof parsed.reply === "string" ? parsed.reply : ""), outfits: Array.isArray(parsed.outfits) ? parsed.outfits : [] };
+  }
+
+  if (!parsed) {
+    const lines = text.split("\n");
+    const lookLines = lines.filter(isOutfitLine);
+    if (lookLines.length > 0) {
+      return {
+        reply: cleanReply(lines.filter((line) => !isOutfitLine(line)).join("\n")),
+        outfits: parseOutfitLines(lookLines.join("\n")),
+      };
+    }
+  }
+
+  if (!parsed && text.trimStart().startsWith("{")) {
+    const loose = extractOutfitsLoose(text);
+    const looseReply = extractReplyLoose(text);
+    if (loose || looseReply) return { reply: cleanReply(looseReply ?? ""), outfits: loose?.outfits ?? [] };
+  }
+
+  const prose = text.replace(/<(think|thinking)>[\s\S]*?<\/\1>/gi, "").trim() || text;
+  return { reply: cleanReply(prose), outfits: [] };
+}
+
+export const CHAT_SYSTEM = `You are Alta, the user's personal stylist inside their wardrobe app. You are a genuinely helpful conversational assistant — equal parts stylist, closet expert, and friend with good taste. Talk naturally, answer the actual question, and explain your reasoning. Do not force outfit suggestions into every reply.
+
+TOOLS (the phone is the tool host):
+- You cannot see the closet until you ask for it. Use the tools whenever an answer depends on what the user actually owns: their pieces, colors, formality, warmth, what's clean or packed, favorites, past looks.
+- get_wardrobe_overview for the map, search_items to find pieces, get_items / get_item for detail, get_saved_looks for their taste memory.
+- Never invent an item, id, color, or attribute. Only state facts returned by tools.
+- Simple greetings, thanks, or general style theory do not need tools; wardrobe-specific claims always do.
+
+WHEN TO INCLUDE OUTFITS:
+- When the user asks for outfit ideas, what to wear, or to style/swap a look, compose real looks from their pieces and include them as cards.
+- When they ask a question (does this go together, is this right for an occasion, what's missing, how to care for a piece, packing advice), just answer in your reply text and omit cards. Add a look only if it genuinely makes the answer better.
+- If they ask to adjust a previous look ("swap the shoes", "make it more casual"), revise that look using the conversation history.
+- If the wardrobe genuinely cannot support the request, say what is missing and why instead of inventing a look.
+
+STYLE JUDGMENT:
+- Style the whole picture: occasion, weather, season, and their taste. Compose only looks you believe are excellent; 3 to 5 at most, fewer is fine.
+- Each look: either one "one_piece", or one "base_top" and one "bottom". Always exactly one "footwear". 3 to 6 pieces. One item per slot. Layers and accessories are optional.
+- Never use an item the tools hide as unavailable.
+
+RESPONSE FORMAT:
+- Write your reply as plain text exactly as it should appear in the chat: usually a short paragraph, simple dashes for lists, no markdown, no JSON, no fences.
+- If (and only if) you are including outfit cards, add a new line after the reply with the marker <<<OUTFITS>>>. Then write one look per line in exactly this pipe format:
+<<<OUTFITS>>>
+item_id, item_id, item_id | Short label | One grounded sentence.
+- Use only ids returned by tools, separated by commas. Never use a pipe inside the label or reason. Omit the marker entirely when there are no outfits.
+- Never describe outfit cards you did not include. The label and reason must describe only the pieces listed in that look.`;
+
+function makeSeenIdsRecorder(wardrobe: ToolWardrobe, seenIds: Set<string>) {
+  return (output: string) => {
+    for (const item of wardrobe.items) {
+      if (seenIds.has(item.id) || !output.includes(item.id)) continue;
+      const escaped = item.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`(^|[^A-Za-z0-9_-])${escaped}([^A-Za-z0-9_-]|$)`).test(output)) seenIds.add(item.id);
+    }
+  };
+}
+
+function normalizeOutfits(raw: unknown, seenIds: Set<string>): RawStyleOutfit[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .map((entry) => ({
+      items: reviveItems(entry.items),
+      label: typeof entry.label === "string" ? entry.label.slice(0, 60) : "Styled look",
+      reason: typeof entry.reason === "string" ? entry.reason.slice(0, 400) : "",
+    }))
+    .filter((entry) => entry.items.length > 0 && entry.items.every((id) => seenIds.has(id)));
+}
+
+function buildChatUserMessage(context: ToolContext & { userRequest?: string; digest?: string }): string {
+  const parts = [
+    `<context>`,
+    `occasion_hint: ${context.occasion ?? "unknown"}`,
+    `season: ${context.weather?.seasonBand ?? context.season ?? "all seasons"}`,
+    `style_tags: ${context.styleTags?.length ? context.styleTags.join(", ") : "none"}`,
+    ...(context.presentation && context.presentation !== "unspecified"
+      ? [`wearer_presentation: ${context.presentation} (style to suit this wearer)`]
+      : []),
+    `</context>`,
+  ];
+  if (context.weather) parts.push(`<weather>${describeWeather(context.weather)}</weather>`);
+  if (context.digest) parts.push(`<wardrobe_digest>\n${context.digest}\n</wardrobe_digest>`);
+  if (context.userRequest) parts.push(`<user_request>${context.userRequest}</user_request>`);
+  parts.push("Answer the user. Use tools for anything that depends on their actual wardrobe. If you include outfit ideas, put them in cards: after your reply, a line <<<OUTFITS>>>, then one line per look as item_id, item_id | Short label | One grounded sentence. Never put look lines inside your reply prose.");
+  return parts.join("\n");
+}
+
+export type AgentProgressEvent =
+  | { type: "tool_call"; name: string; label: string; detail?: string }
+  | { type: "tool_result"; name: string; summary: string }
+  | { type: "text_delta"; text: string };
+
+export type StylistChatResult = {
+  reply: string;
+  outfits: RawStyleOutfit[];
+  turnsUsed: number;
+};
+
+const OUTFIT_MARKER = "<<<OUTFITS>>>";
+
+/**
+ * Streams only the user-facing reply text. Handles the marker protocol
+ * (reply text, then <<<OUTFITS>>> plus pipe-delimited looks) and the older
+ * JSON envelope, so chat users never see scaffolding.
+ */
+function createReplyStream(onText: (text: string) => void) {
+  let mode: "detect" | "json" | "prose" | "done" = "detect";
+  let probe = "";
+  let pending = "";
+  let inReply = false;
+  let escape: string | null = null;
+
+  const emit = (text: string) => { if (text) onText(text); };
+
+  const pushProse = (text: string) => {
+    pending += text;
+    const marker = pending.indexOf(OUTFIT_MARKER);
+    if (marker >= 0) {
+      const visible = pending.slice(0, marker);
+      pending = "";
+      mode = "done";
+      emit(visible);
+      return;
+    }
+    const lines = pending.split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      if (isOutfitLine(line)) {
+        pending = "";
+        mode = "done";
+        return;
+      }
+      emit(`${line}\n`);
+    }
+  };
+
+  const consumeReply = (chunk: string) => {
+    for (const ch of chunk) {
+      if (escape !== null) {
+        escape += ch;
+        if (escape[0] === "u") {
+          if (escape.length === 5) {
+            const code = Number.parseInt(escape.slice(1), 16);
+            if (Number.isFinite(code)) emit(String.fromCharCode(code));
+            escape = null;
+          }
+        } else {
+          const map: Record<string, string> = { '"': '"', "\\": "\\", "/": "/", n: "\n", t: "\t", r: "\r", b: "\b", f: "\f" };
+          emit(map[escape] ?? escape);
+          escape = null;
+        }
+        continue;
+      }
+      if (ch === "\\") { escape = ""; continue; }
+      if (ch === '"') { mode = "done"; return; }
+      emit(ch);
+    }
+  };
+
+  const consumeJson = (chunk: string) => {
+    if (inReply) { consumeReply(chunk); return; }
+    probe += chunk;
+    const match = /"reply"\s*:\s*"/.exec(probe);
+    if (match) {
+      const rest = probe.slice(match.index + match[0].length);
+      probe = "";
+      inReply = true;
+      consumeReply(rest);
+    } else if (probe.length > 400) {
+      probe = probe.slice(-400);
+    }
+  };
+
+  return {
+    push(chunk: string) {
+      if (mode === "done" || !chunk) return;
+      if (mode === "detect") {
+        probe += chunk;
+        const trimmed = probe.replace(/^\s+/, "");
+        if (!trimmed) return;
+        if (trimmed.startsWith("{")) {
+          mode = "json";
+          probe = "";
+          consumeJson(trimmed);
+        } else {
+          mode = "prose";
+          probe = "";
+          pushProse(trimmed);
+        }
+        return;
+      }
+      if (mode === "prose") { pushProse(chunk); return; }
+      consumeJson(chunk);
+    },
+    end() {
+      if (mode === "detect" && probe) {
+        emit(probe);
+        probe = "";
+      } else if (mode === "prose" && pending) {
+        if (!isOutfitLine(pending)) emit(pending);
+        pending = "";
+      }
+    },
+  };
+}
+
+/** Human-friendly labels for the chat activity feed. */
+function toolDisplay(name: string, args: Record<string, unknown>): { label: string; detail?: string } {
+  switch (name) {
+    case "get_wardrobe_overview":
+      return { label: "Reading your closet" };
+    case "search_items": {
+      const bits: string[] = [];
+      if (typeof args.role === "string") bits.push(args.role.replace(/_/g, " "));
+      if (typeof args.category === "string") bits.push(args.category);
+      if (Array.isArray(args.colors)) bits.push(args.colors.join(", "));
+      if (typeof args.query === "string" && args.query) bits.push(`"${args.query}"`);
+      return { label: "Searching your pieces", detail: bits.join(" · ") || undefined };
+    }
+    case "get_items":
+      return { label: "Opening pieces", detail: Array.isArray(args.ids) ? String(args.ids.length) : undefined };
+    case "get_item":
+      return { label: "Opening a piece" };
+    case "get_saved_looks":
+      return { label: "Checking your saved looks" };
+    default:
+      return { label: name.replace(/_/g, " ") };
+  }
+}
+
+function toolSummary(name: string, output: string): string {
+  switch (name) {
+    case "get_wardrobe_overview": {
+      const match = /total_items:\s*(\d+)/.exec(output);
+      return match ? `${match[1]} wearable pieces` : "Closet loaded";
+    }
+    case "search_items": {
+      if (output.startsWith("0 results")) return "No matches";
+      const match = /total:\s*(\d+)/.exec(output);
+      return match ? `${match[1]} ${match[1] === "1" ? "match" : "matches"}` : "Search done";
+    }
+    case "get_items": {
+      const count = output.split("\n").filter((line) => line && !line.startsWith("missing_ids:")).length;
+      return `${count} ${count === 1 ? "piece" : "pieces"}`;
+    }
+    case "get_saved_looks":
+      return output === "No saved looks yet." ? "No saved looks yet" : `${output.split("\n").length} saved looks`;
+    case "get_item":
+      return output.startsWith("No item") ? "Piece not found" : "Piece loaded";
+    default:
+      return "Done";
+  }
+}
+
+/**
+ * Conversational agent lane: free-form answers, tools on demand, and outfits
+ * only when the model decides they belong. Plain prose is a valid final answer.
+ */
+export async function runChatAgent(
+  context: ToolContext & { userRequest?: string; includeDigest?: boolean },
+  wardrobe: ToolWardrobe,
+  options: { system?: string; history?: Array<{ role: string; content: string }>; temperature?: number; maxTurns?: number; onEvent?: (event: AgentProgressEvent) => void } = {},
+): Promise<StylistChatResult> {
+  const system = options.system ?? CHAT_SYSTEM;
+  const digest = context.includeDigest !== false ? buildOverview(wardrobe) : undefined;
+  const seed: Array<Record<string, unknown>> = [
+    ...(options.history ?? []).map((entry) => ({ role: entry.role, content: entry.content })),
+    { role: "user", content: buildChatUserMessage({ ...context, digest }) },
+  ];
+  const messages: Array<Record<string, unknown>> = [{ role: "system", content: system }, ...seed];
+  const seenIds = new Set<string>();
+  const recordOutput = makeSeenIdsRecorder(wardrobe, seenIds);
+  for (const entry of seed) {
+    if (typeof entry.content === "string") recordOutput(entry.content);
+  }
+  const maxTurns = options.maxTurns ?? MAX_AGENT_TURNS;
+  const wantsOutfits = /\b(outfits?|what (?:should|to) (?:i )?wear|style me|put together|dress me|outfit ideas?|looks? (?:for|to wear))\b/i.test(context.userRequest ?? "");
+  let nudged = false;
+
+  const onEvent = options.onEvent;
+
+  for (let turn = 0; turn < maxTurns; turn += 1) {
+    let result: Awaited<ReturnType<typeof runStyleTurn>>;
+    let streamed = false;
+    if (onEvent) {
+      const replyStream = createReplyStream((text) => onEvent({ type: "text_delta", text }));
+      try {
+        result = await runStyleTurnStream(messages, STYLIST_TOOLS, AGENT_MAX_TOKENS, options.temperature ?? 0.8, (text) => {
+          streamed = true;
+          replyStream.push(text);
+        });
+        replyStream.end();
+      } catch (error) {
+        if (streamed) throw error;
+        result = await runStyleTurn(messages, STYLIST_TOOLS, AGENT_MAX_TOKENS, options.temperature ?? 0.8);
+      }
+    } else {
+      result = await runStyleTurn(messages, STYLIST_TOOLS, AGENT_MAX_TOKENS, options.temperature ?? 0.8);
+    }
+
+    if (result.tool_calls && result.tool_calls.length > 0) {
+      messages.push({ role: "assistant", content: "", tool_calls: result.tool_calls.map((call) => ({
+        id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) },
+      })) });
+      for (const call of result.tool_calls) {
+        onEvent?.({ type: "tool_call", name: call.name, ...toolDisplay(call.name, call.arguments) });
+        const output = runTool(call.name, call.arguments, wardrobe);
+        recordOutput(output);
+        onEvent?.({ type: "tool_result", name: call.name, summary: toolSummary(call.name, output) });
+        messages.push({ role: "tool", tool_call_id: call.id, content: output });
+      }
+      continue;
+    }
+
+    const text = (result.text ?? "").trim();
+    if (!text) {
+      if (!nudged) {
+        nudged = true;
+        messages.push({ role: "user", content: "Reply to the user now. Answer in plain text. If you include outfit cards, put <<<OUTFITS>>> on a new line, then one look per line as item_id, item_id | Short label | One grounded sentence." });
+        continue;
+      }
+      throw new WardrobeApiError("The assistant returned no reply — try again.");
+    }
+
+    const payload = parseChatPayload(text);
+    const reply = payload.reply;
+    const rawOutfits = payload.outfits;
+
+    if (rawOutfits.length === 0 && wantsOutfits && !nudged) {
+      nudged = true;
+      messages.push({ role: "assistant", content: text });
+      messages.push({ role: "user", content: "You did not attach any outfit cards. Call search_items (or get_items) to fetch the exact item ids if needed, then add a line <<<OUTFITS>>>, then one look per line as item_id, item_id | Short label | One grounded sentence. Use only ids returned by tools. Keep the reply text short." });
+      continue;
+    }
+
+    if (rawOutfits.length > 0) {
+      const outfits = normalizeOutfits(rawOutfits, seenIds);
+      if (outfits.length === 0 && !nudged) {
+        nudged = true;
+        messages.push({ role: "assistant", content: text });
+        messages.push({ role: "user", content: "Those outfit item ids were not returned by any tool. Call search_items now to fetch the exact ids, then rewrite the cards using only ids you actually saw. Keep the same look if it still works." });
+        continue;
+      }
+      if (outfits.length === 0 && !reply) throw new WardrobeApiError("The assistant returned an empty reply — try again.");
+      return { reply, outfits, turnsUsed: turn + 1 };
+    }
+
+    if (!reply) throw new WardrobeApiError("The assistant returned an empty reply — try again.");
+    return { reply, outfits: [], turnsUsed: turn + 1 };
+  }
+
+  throw new WardrobeApiError("Assistant session exceeded the turn limit — try again.");
+}
 
 function buildUserMessage(context: ToolContext & { count?: number; userRequest?: string; digest?: string }): string {
   const occasion = context.occasion ?? "everyday";
@@ -514,14 +939,11 @@ async function runAgentLoop(
   const seenIds = new Set<string>();
 
   // Record which real item ids the model has actually been shown, so it can
-  // never compose from guessed ids (the digest is counts, not the pieces).
-  const recordOutput = (output: string) => {
-    for (const item of wardrobe.items) {
-      if (seenIds.has(item.id) || !output.includes(item.id)) continue;
-      const escaped = item.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (new RegExp(`(^|[^A-Za-z0-9_-])${escaped}([^A-Za-z0-9_-]|$)`).test(output)) seenIds.add(item.id);
-    }
-  };
+  // never compose from guessed ids. The digest and prior turns count as seen.
+  const recordOutput = makeSeenIdsRecorder(wardrobe, seenIds);
+  for (const entry of seed) {
+    if (typeof entry.content === "string") recordOutput(entry.content);
+  }
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     // qwen3 reasons before answering; the full budget (server caps at 2000)

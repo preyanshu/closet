@@ -1,6 +1,6 @@
 import { type Item, type Outfit } from "@/data/mock";
 import { WardrobeApiError } from "@/services/api/wardrobe-api";
-import { runStylistAgent, critiqueOutfits, type RawStyleOutfit, type StylistWardrobe } from "@/services/stylist-agent";
+import { runStylistAgent, runChatAgent, critiqueOutfits, type AgentProgressEvent, type RawStyleOutfit, type StylistWardrobe } from "@/services/stylist-agent";
 import { judgeOccasionFit } from "@/services/decision";
 import type { WeatherSummary } from "@/services/weather";
 import { DEFAULT_WEARER_PRESENTATION, type ItemRole, type OutfitItemRef, type WearerPresentation } from "@/types/domain";
@@ -613,6 +613,12 @@ export type ComposeAIResult = {
   suggestions?: OutfitSuggestion[];
 };
 
+export type ChatAIResult = {
+  reply: string;
+  outfits: Outfit[];
+  turnsUsed?: number;
+};
+
 const SUGGESTION_COPY: Partial<Record<ItemRole, { label: string; hint: string }>> = {
   base_top: { label: "A top", hint: "a shirt, blouse, tee, or knit" },
   bottom: { label: "A bottom", hint: "trousers, jeans, or a skirt" },
@@ -665,6 +671,8 @@ export type ComposeAIOptions = {
   presentation?: WearerPresentation;
   /** Sampling temperature for the stylist model (default 0.8; higher = more creative). */
   temperature?: number;
+  /** Live progress for the chat UI (tool activity + streamed text). */
+  onEvent?: (event: AgentProgressEvent) => void;
   /**
    * Run a Jev-gated review pass: Jev judges whether the ensembles already read
    * for the occasion, and only a flagged look triggers a re-styling session.
@@ -729,42 +737,91 @@ export async function composeOutfitsAI(
     { system: options.system, history: options.history, temperature: options.temperature },
   );
 
-  let source = result.outfits;
-  let reply = result.reply;
-  let turnsUsed = result.turnsUsed;
-
-  // Jev decides first (one ~40ms Clef call): if the ensembles already read for
-  // the occasion, we skip the expensive re-styling session entirely. Only a
-  // flagged look triggers the model review — with Jev's critique as feedback.
-  if (resolveSelfCritique(options.selfCritique)) {
-    try {
-      const fit = await judgeOccasionFit(
-        { occasion: context.occasion ?? "everyday", season, styleTags: context.styleTags, weather: options.weather },
-        result.outfits.map((outfit) => ({ label: outfit.label, item_ids: outfit.items, reason: outfit.reason })),
-        pool,
-      );
-      if (!fit.ok) {
-        const reviewed = await critiqueOutfits(
-          { occasion: context.occasion, season, styleTags: context.styleTags, weather: options.weather, presentation, count: MAX_OUTFITS },
-          result.outfits,
-          wardrobe,
-          { feedback: fit.summary },
-        );
-        if (reviewed.outfits.length > 0) {
-          source = reviewed.outfits;
-          reply = reviewed.reply ?? reply;
-          turnsUsed += reviewed.turnsUsed;
-        }
-      }
-    } catch {
-      // keep the stylist's original outfits
-    }
-  }
-
-  const verified = verifyAndRepairOutfits(source, pool, { ...context, season, count: MAX_OUTFITS });
+  const refined = await refineOutfits(context, result.outfits, result.reply, wardrobe, pool, season, options);
+  const verified = verifyAndRepairOutfits(refined.source, pool, { ...context, season, count: MAX_OUTFITS });
   if (verified.length === 0) throw new WardrobeApiError("The stylist returned no valid combos — try again.");
 
   // Quality over quantity: never substitute rules-engine looks. If the stylist
   // produced a single great outfit, we show a single great outfit.
-  return { outfits: verified.slice(0, MAX_OUTFITS), reply, turnsUsed };
+  return { outfits: verified.slice(0, MAX_OUTFITS), reply: refined.reply, turnsUsed: result.turnsUsed + refined.turnsUsed };
+}
+
+/**
+ * Jev decides first (one ~40ms Clef call): if the ensembles already read for
+ * the occasion, we skip the expensive re-styling session entirely. Only a
+ * flagged look triggers the model review — with Jev's critique as feedback.
+ */
+async function refineOutfits(
+  context: OutfitContext,
+  source: RawStyleOutfit[],
+  reply: string | undefined,
+  wardrobe: StylistWardrobe,
+  pool: Item[],
+  season: SeasonBand | undefined,
+  options: ComposeAIOptions,
+): Promise<{ source: RawStyleOutfit[]; reply?: string; turnsUsed: number }> {
+  if (!resolveSelfCritique(options.selfCritique)) return { source, reply, turnsUsed: 0 };
+  try {
+    const fit = await judgeOccasionFit(
+      { occasion: context.occasion ?? "everyday", season, styleTags: context.styleTags, weather: options.weather },
+      source.map((outfit) => ({ label: outfit.label, item_ids: outfit.items, reason: outfit.reason })),
+      pool,
+    );
+    if (!fit.ok) {
+      const reviewed = await critiqueOutfits(
+        { occasion: context.occasion, season, styleTags: context.styleTags, weather: options.weather, presentation: options.presentation ?? DEFAULT_WEARER_PRESENTATION, count: MAX_OUTFITS },
+        source,
+        wardrobe,
+        { feedback: fit.summary },
+      );
+      if (reviewed.outfits.length > 0) {
+        return { source: reviewed.outfits, reply: reviewed.reply ?? reply, turnsUsed: reviewed.turnsUsed };
+      }
+    }
+  } catch {
+    // keep the stylist's original outfits
+  }
+  return { source, reply, turnsUsed: 0 };
+}
+
+/**
+ * Conversational lane: Alta can answer wardrobe questions with tools and only
+ * returns outfit cards when they actually belong in the reply.
+ */
+export async function chatWithAlta(
+  context: OutfitContext,
+  items: Item[],
+  options: ComposeAIOptions = {},
+): Promise<ChatAIResult> {
+  const season = context.season ?? options.weather?.seasonBand;
+  const presentation = options.presentation ?? DEFAULT_WEARER_PRESENTATION;
+  const pool = items.filter(isEligible);
+  const wardrobe: StylistWardrobe = {
+    items,
+    favoriteIds: new Set(options.favoriteIds ?? []),
+    savedLooks: options.savedLooks ?? [],
+  };
+
+  const result = await runChatAgent(
+    {
+      occasion: context.occasion,
+      season,
+      styleTags: context.styleTags,
+      weather: options.weather,
+      presentation,
+      userRequest: options.userRequest,
+    },
+    wardrobe,
+    { system: options.system, history: options.history, temperature: options.temperature, onEvent: options.onEvent },
+  );
+
+  if (result.outfits.length === 0) return { reply: result.reply, outfits: [], turnsUsed: result.turnsUsed };
+
+  const refined = await refineOutfits(context, result.outfits, result.reply, wardrobe, pool, season, options);
+  const verified = verifyAndRepairOutfits(refined.source, pool, { ...context, season, count: MAX_OUTFITS });
+  return {
+    reply: refined.reply ?? result.reply,
+    outfits: verified.slice(0, MAX_OUTFITS),
+    turnsUsed: result.turnsUsed + refined.turnsUsed,
+  };
 }

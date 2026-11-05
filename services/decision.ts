@@ -80,46 +80,6 @@ export async function triageWardrobeDiff(
   };
 }
 
-export type ParsedStylingPrompt = {
-  occasion: string;
-  formality: number;
-  warmth: number;
-  styleVibe: string;
-  isStylingRequest: boolean;
-};
-
-const OCCASIONS = ["dinner", "work", "casual", "date", "event", "travel", "everyday"] as const;
-const STYLE_VIBES = ["minimal", "old_money", "streetwear", "clean_girl", "office", "evening"] as const;
-
-/** Parse a free-text chat prompt into structured context for the agent. */
-export async function parseStylingPrompt(prompt: string): Promise<ParsedStylingPrompt> {
-  const answers = await runDecision(prompt, {
-    is_styling: { type: "noul", instructions: "Is the user asking for outfit styling, outfit ideas, or wardrobe help?" },
-    occasion: {
-      type: "choice",
-      instructions: "What occasion is closest to this request?",
-      criteria: Object.fromEntries(OCCASIONS.map((o) => [o, o])),
-    },
-    formality: { type: "score", instructions: "How dressy should the outfit be? 1 = very casual, 5 = formal.", criteria: ["1", "2", "3", "4", "5"] },
-    warmth: { type: "score", instructions: "How warm should the layers be? 1 = light/breathable, 5 = heavy/cold-weather.", criteria: ["1", "2", "3", "4", "5"] },
-    style_vibe: {
-      type: "choice",
-      instructions: "Which style aesthetic is closest?",
-      criteria: Object.fromEntries(STYLE_VIBES.map((v) => [v, v])),
-    },
-  });
-
-  return {
-    occasion: choiceOf(answers, "occasion")?.choice ?? "everyday",
-    formality: Math.round(scoreOf(answers, "formality") ?? 3),
-    warmth: Math.round(scoreOf(answers, "warmth") ?? 3),    styleVibe: choiceOf(answers, "style_vibe")?.choice ?? "minimal",
-    // Calibrated on live clef-flash: a clear styling ask scores ~0.63–0.95 in
-    // this combined call (0.77 when asked alone), while chit-chat sits ~0.01.
-    // 0.7 misfired on real prompts, so the gate is 0.5 — a wide margin either way.
-    isStylingRequest: (noulOf(answers, "is_styling") ?? 0) >= 0.5,
-  };
-}
-
 export type RetryDirection =
   | "shift_palette"
   | "change_formality"
@@ -152,19 +112,6 @@ export async function decideRetryDirection(
   });
   const direction = choiceOf(answers, "direction")?.choice;
   return (direction as RetryDirection) ?? "different_silhouette";
-}
-
-/** Courtesy gate after repeated try-agains. */
-export async function shouldAskToNarrowDown(retryCount: number, originalPrompt: string): Promise<boolean> {
-  if (retryCount < 2) return false;
-  try {
-    const answers = await runDecision({ retry_count: retryCount, original_prompt: originalPrompt }, {
-      narrow: { type: "noul", instructions: "Should the assistant ask the user to narrow down their request instead of retrying again?" },
-    });
-    return (noulOf(answers, "narrow") ?? 0) >= 0.6;
-  } catch {
-    return retryCount >= 3;
-  }
 }
 
 export type CoherenceVerdict = { ok: boolean; paletteScore: number; issues: string[] };

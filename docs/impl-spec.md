@@ -231,14 +231,25 @@ cheap typed judgments.
   are revived before execution (server normalize + client `runTool`).
 - **Usage/cost logging**: the worker logs `in`/`out` tokens and estimated neurons per AI call
   (`NEURON_RATES`), visible in `wrangler dev` output.
-- Final reply is **only** JSON: `{"reply","outfits":[{"items","label","reason"}]}` — one
-  contract for both lanes (daily lane ignores `reply`, chat renders it as a bubble).
-- `CHAT_SYSTEM` extends the brief: conversational `reply` (<2 sentences), visibly-different
-  retries after rejects.
+- Compose/daily lane replies with JSON: `{"reply","outfits":[{"items","label","reason"}]}`
+  (the daily lane ignores `reply`).
+- **Chat lane is plain text + an outfit marker** (JSON quoting was unreliable on the streaming
+  model): the reply is normal prose; when cards are included, a new line `<<<OUTFITS>>>` is
+  followed by one pipe-delimited look per line (`id, id | label | reason`). The parser also
+  accepts the legacy JSON envelope and salvages loose/unquoted JSON.
+- `createReplyStream` streams only user-facing text — everything before the marker (or the
+  legacy `reply` field) — so JSON/pipe scaffolding never flashes in the bubble.
+- `CHAT_SYSTEM` is conversational and standalone (not derived from the compose brief); retries
+  with explicit outfit intent append the marker instruction.
 
 ### Server (`server/src/index.ts`)
 - `POST /v1/style/turn` — thin proxy `{ messages, tools, max_tokens?, temperature? }` →
   `{ tool_calls }` (`normalizeToolCalls`, handles function-wrapped/flat shapes) or `{ text }`.
+- `POST /v1/style/stream` — SSE variant over the OpenAI-compatible
+  `/ai/v1/chat/completions` endpoint (`stream: true`). Accumulates fragmented `tool_calls`
+  arguments by index, forwards `event: delta` text (string or content-array chunks),
+  `event: tool_calls`, `event: done`, `event: error`; logs usage as `style.stream`. Requires a
+  non-empty `tools` array.
   Model env-overridable via `STYLE_MODEL` (default `qwen3-30b-a3b-fp8`). Final-turn text
   unwraps `choices[0].message.content` / structured `response`. Messages cap 400.
 - `POST /v1/decide` — thin proxy `{ state, questions, images? }` → `{ answers }` to
@@ -251,9 +262,9 @@ cheap typed judgments.
 
 ### Decision layer (`services/decision.ts`)
 Typed Clef helpers (each one small `/v1/decide` call; caller handles fallback):
-`triageWardrobeDiff` (restyle noul + impact choice), `parseStylingPrompt`
-(occasion/formality/warmth/style_vibe/is_styling), `decideRetryDirection`,
-`shouldAskToNarrowDown`, `checkCoherence` (palette score + cohesion), `salvageCandidates`.
+`triageWardrobeDiff` (restyle noul + impact choice), `decideRetryDirection`,
+`checkCoherence` (palette score + cohesion), `salvageCandidates`. `parseStylingPrompt` and
+`shouldAskToNarrowDown` were removed — chat no longer gates or injects canned wording.
 Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
 
 ### Composition (`services/outfit-engine.ts`)
@@ -265,6 +276,11 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   can't cover a top (or one-piece) + bottom + shoes, it returns **no looks plus role-based
   add suggestions** (`canComposeOutfit` / `suggestWardrobeAdditions`) and skips the model
   call entirely.
+- `chatWithAlta(context, items, options)` is the conversational lane: it runs
+  `runChatAgent` (same tools/loop, chat system prompt), accepts plain prose plus an optional
+  `<<<OUTFITS>>>` pipe block (legacy `{reply, outfits?}` JSON still parses), and only
+  verifies/critiques looks that the model chose to include. No wardrobe gate and no outfit
+  requirement — a question can answer with zero looks.
 - `composeOutfits` / `generateOutfitsForToday` remain for the manual **builder** lane only
   (instant rules). They are never used to fill or rescue agent output.
 
@@ -297,15 +313,26 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   add-to-closet hints, and chat folds the hints into its reply.
 
 ### Chat lane (`app/chat.tsx`)
-- Typed `ChatMessage` (user/alta text + `outfits?` + error/narrow kinds); per-message agent
-  sessions seeded with conversation history (ephemeral; saving persists via `savedLooks`).
-- **Trivial-chat gate**: `parseStylingPrompt` → `is_styling` noul ≥ 0.5 (live-calibrated:
-  clear styling asks score ~0.63–0.95 in the combined call, chit-chat ~0.01); chit-chat gets a canned
-  reply (0 styling sessions). Gate failure → treat as styling.
-- Offer → react → refine: cards show Save (♡ persists full outfit) / Not this (accumulates
-  rejects) / message-level ↻ Try again → `decideRetryDirection` seeds a visibly-different
-  retry; `shouldAskToNarrowDown` after repeated retries → ask instead of burning sessions;
-  failure → "Styling hiccup" + inline Retry. Typing indicator + haptics throughout.
+- **Conversational assistant, not an outfit vending machine**: every message goes through
+  `chatWithAlta` with the tool-using agent. It answers wardrobe questions (what goes with
+  these boots, is this right for a wedding, what's missing, packing) by calling
+  `get_wardrobe_overview` / `search_items` / `get_items` / `get_saved_looks` as needed, and
+  only attaches outfit cards when the user asks for looks or a concrete look genuinely helps.
+  There is no trivial-chat gate, no starter assistant bubble, and no canned reply; plain prose
+  is a valid answer and an empty conversation shows a static prompt instead of a fake message.
+- Outfit cards appear only when `outfits.length > 0`; Save (♡ persists the full outfit) /
+  Not this (accumulates rejects) / message-level ↻ Try again → `decideRetryDirection` seeds a
+  visibly-different retry. Retry is outfit-specific and forces outfit cards via the marker.
+  Failures render a bare Retry control, never a fabricated stylist line.
+- **Streaming + activity**: chat uses `runStyleTurnStream` (SSE `/v1/style/stream`) and renders
+  the reply token-by-token (40ms throttle). Tool turns show a live step feed — "Searching your
+  pieces · black", spinner → checkmark with a result summary — so the assistant visibly works
+  through the closet. An empty/failed turn shows no fake text, just Retry; the draft is replaced
+  by the parsed reply on completion so malformed streaming scaffolding never sticks.
+- One request runs at a time; history includes prior outfit-bearing turns. Typing indicator
+  + haptics throughout.
+- Typed `ChatMessage` (user/alta text + `outfits?` + error kinds); per-message agent sessions
+  seeded with conversation history (ephemeral; saving persists via `savedLooks`).
 - **No "wore this" in chat** — chat offers, it never commits.
 
 ### B signals (option B: real signals)
