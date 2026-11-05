@@ -59,7 +59,7 @@ export default function ChatScreen() {
 
   const history = () =>
     messages
-      .filter((m) => m.text || m.outfits?.length)
+      .filter((m) => m.kind !== "error" && (m.text || m.outfits?.length))
       .map((m) => ({
         role: m.role === "alta" ? "assistant" : "user",
         content: m.outfits?.length
@@ -70,18 +70,23 @@ export default function ChatScreen() {
   const beginDraft = (originalPrompt: string) => {
     const draftId = `${Date.now()}-a`;
     let pending = "";
+    let streamedText = "";
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const flush = () => {
       if (!pending) return;
       const chunk = pending;
       pending = "";
+      streamedText += chunk;
       setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: m.text + chunk } : m)));
     };
-    const stop = () => {
+    const settle = () => {
       if (timer) clearTimeout(timer);
       timer = null;
-      flush();
+      if (pending) {
+        streamedText += pending;
+        pending = "";
+      }
     };
 
     setMessages((prev) => [...prev, { id: draftId, role: "alta", text: "", steps: [], streaming: true, originalPrompt }]);
@@ -118,18 +123,19 @@ export default function ChatScreen() {
     };
 
     const complete = (result: { reply: string; outfits: Outfit[] }) => {
-      stop();
+      settle();
+      const text = result.reply.trim() ? result.reply : streamedText;
       setMessages((prev) => prev.map((m) => (m.id === draftId ? {
         ...m,
-        text: result.reply,
+        text,
         outfits: result.outfits.length > 0 ? result.outfits : undefined,
         streaming: false,
       } : m)));
     };
 
     const fail = () => {
-      stop();
-      setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: "", steps: [], kind: "error", streaming: false } : m)));
+      settle();
+      setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: streamedText, steps: [], kind: "error", streaming: false } : m)));
     };
 
     return { onEvent, complete, fail };
@@ -233,7 +239,7 @@ export default function ChatScreen() {
           favoriteIds: [...favoriteIds],
           savedLooks,
           userRequest: `${originalPrompt}\n${seed}\nThe user explicitly wants a fresh set of outfit options now.`,
-          system: `${CHAT_SYSTEM}\n\nFor this turn the user explicitly wants another set of outfit options — include outfit cards using the <<<OUTFITS>>> marker.`,
+          system: `${CHAT_SYSTEM}\n\nFor this turn the user explicitly wants another set of outfit options — write a short reply, then call show_outfits with structured looks.`,
           history: history(),
           weather: weather ?? undefined,
           presentation: profile.presentation,
