@@ -330,10 +330,11 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   visibly-different retry. Retry is outfit-specific and forces `show_outfits`.
   Failures keep any streamed prose and add a bare Retry control, never a fabricated stylist line.
 - **Streaming + activity**: chat uses `runStyleTurnStream` (SSE `/v1/style/stream`) and renders
-  the reply token-by-token (40ms throttle). Tool turns show a live step feed — "Searching your
-  pieces · black", spinner → checkmark with a result summary — so the assistant visibly works
-  through the closet. `show_outfits` renders real image cards; ids stay out of the bubble. An
-  empty/failed turn shows no fake text, just Retry (any partial prose is preserved).
+  the reply token-by-token (40ms throttle). While a turn runs, a **single live status line**
+  shows "Thinking…" or the one tool currently running ("Searching your pieces · black…"); tools
+  execute with a short 240ms dwell so each is perceptible, and the line advances instead of
+  stacking every call at once. `show_outfits` renders real image cards; ids stay out of the
+  bubble. An empty/failed turn shows no fake text, just Retry (any partial prose is preserved).
 - One request runs at a time; history includes prior outfit-bearing turns. Typing indicator
   + haptics throughout.
 - Typed `ChatMessage` (user/alta text + `outfits?` + error kinds); per-message agent sessions

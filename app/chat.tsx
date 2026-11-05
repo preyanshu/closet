@@ -35,6 +35,7 @@ type ChatMessage = {
   outfits?: Outfit[];
   steps?: ChatStep[];
   streaming?: boolean;
+  thinking?: boolean;
   kind?: "text" | "error";
   originalPrompt?: string;
   rejected?: string[];
@@ -78,7 +79,7 @@ export default function ChatScreen() {
       const chunk = pending;
       pending = "";
       streamedText += chunk;
-      setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: m.text + chunk } : m)));
+      setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: m.text + chunk, thinking: false } : m)));
     };
     const settle = () => {
       if (timer) clearTimeout(timer);
@@ -89,7 +90,7 @@ export default function ChatScreen() {
       }
     };
 
-    setMessages((prev) => [...prev, { id: draftId, role: "alta", text: "", steps: [], streaming: true, originalPrompt }]);
+    setMessages((prev) => [...prev, { id: draftId, role: "alta", text: "", steps: [], streaming: true, thinking: true, originalPrompt }]);
 
     const onEvent = (event: AgentProgressEvent) => {
       if (event.type === "text_delta") {
@@ -99,6 +100,10 @@ export default function ChatScreen() {
         }
         return;
       }
+      if (event.type === "thinking") {
+        setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, thinking: true } : m)));
+        return;
+      }
       if (event.type === "tool_call") {
         const step: ChatStep = {
           id: `${draftId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -106,7 +111,7 @@ export default function ChatScreen() {
           detail: event.detail,
           state: "running",
         };
-        setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, steps: [...(m.steps ?? []), step] } : m)));
+        setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, steps: [...(m.steps ?? []), step], thinking: false } : m)));
         return;
       }
       setMessages((prev) => prev.map((m) => {
@@ -118,7 +123,7 @@ export default function ChatScreen() {
             break;
           }
         }
-        return { ...m, steps };
+        return { ...m, steps, thinking: true };
       }));
     };
 
@@ -130,12 +135,13 @@ export default function ChatScreen() {
         text,
         outfits: result.outfits.length > 0 ? result.outfits : undefined,
         streaming: false,
+        thinking: false,
       } : m)));
     };
 
     const fail = () => {
       settle();
-      setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: streamedText, steps: [], kind: "error", streaming: false } : m)));
+      setMessages((prev) => prev.map((m) => (m.id === draftId ? { ...m, text: streamedText, steps: [], kind: "error", streaming: false, thinking: false } : m)));
     };
 
     return { onEvent, complete, fail };
@@ -292,8 +298,7 @@ export default function ChatScreen() {
         )}
         {messages.map((msg) => (
           <View key={msg.id} style={{ gap: 8 }}>
-            {msg.steps?.length ? <ActivityFeed steps={msg.steps} /> : null}
-            {msg.streaming && !msg.text && !msg.steps?.length ? <ThinkingRow /> : null}
+            {msg.streaming ? <StepStatus steps={msg.steps} thinking={msg.thinking} /> : null}
             {msg.text ? <Bubble role={msg.role} text={msg.streaming ? `${msg.text}▍` : msg.text} /> : null}
             {msg.outfits?.map((outfit) => (
               <OutfitCard
@@ -428,23 +433,21 @@ function pickOccasion(text: string): Occasion {
   return "everyday";
 }
 
-function ActivityFeed({ steps }: { steps: ChatStep[] }) {
-  return (
-    <View style={{ alignSelf: "flex-start", gap: 6, paddingLeft: 2 }}>
-      {steps.map((step) => (
-        <View key={step.id} style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-          {step.state === "running"
-            ? <ActivityIndicator size="small" color={adaptiveColors.tertiaryLabel} />
-            : <SymbolView name="checkmark.circle.fill" tintColor={adaptiveColors.tertiaryLabel} style={{ width: 13, height: 13 }} />}
-          <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>
-            {step.label}
-            {step.detail ? ` · ${step.detail}` : ""}
-            {step.summary ? ` — ${step.summary}` : ""}
-          </Text>
-        </View>
-      ))}
-    </View>
-  );
+function StepStatus({ steps, thinking }: { steps?: ChatStep[]; thinking?: boolean }) {
+  const running = steps ? [...steps].reverse().find((step) => step.state === "running") : undefined;
+  if (running) {
+    return (
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start", paddingLeft: 2, height: 34 }}>
+        <ActivityIndicator size="small" color={adaptiveColors.tertiaryLabel} />
+        <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>
+          {running.label}
+          {running.detail ? ` · ${running.detail}` : ""}…
+        </Text>
+      </View>
+    );
+  }
+  if (!thinking) return null;
+  return <ThinkingRow />;
 }
 
 function ThinkingRow() {

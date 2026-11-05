@@ -653,6 +653,7 @@ function buildChatUserMessage(context: ToolContext & { userRequest?: string; dig
 }
 
 export type AgentProgressEvent =
+  | { type: "thinking" }
   | { type: "tool_call"; name: string; label: string; detail?: string }
   | { type: "tool_result"; name: string; summary: string }
   | { type: "text_delta"; text: string };
@@ -784,7 +785,7 @@ function toolDisplay(name: string, args: Record<string, unknown>): { label: stri
       if (typeof args.category === "string") bits.push(args.category);
       if (Array.isArray(args.colors)) bits.push(args.colors.join(", "));
       if (typeof args.query === "string" && args.query) bits.push(`"${args.query}"`);
-      return { label: "Searching your pieces", detail: bits.join(" · ") || undefined };
+      return { label: "Searching your wardrobe", detail: bits.join(" · ") || undefined };
     }
     case "get_items":
       return { label: "Opening pieces", detail: Array.isArray(args.ids) ? String(args.ids.length) : undefined };
@@ -873,8 +874,10 @@ export async function runChatAgent(
   let lastReply = "";
 
   const onEvent = options.onEvent;
+  const pause = () => (onEvent ? new Promise<void>((resolve) => { setTimeout(resolve, 240); }) : Promise.resolve());
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
+    onEvent?.({ type: "thinking" });
     let result: Awaited<ReturnType<typeof runStyleTurn>>;
     let streamed = false;
     if (onEvent) {
@@ -906,6 +909,7 @@ export async function runChatAgent(
 
       for (const call of wardrobeCalls) {
         onEvent?.({ type: "tool_call", name: call.name, ...toolDisplay(call.name, call.arguments) });
+        await pause();
         const output = runTool(call.name, call.arguments, wardrobe);
         recordOutput(output);
         onEvent?.({ type: "tool_result", name: call.name, summary: toolSummary(call.name, output) });
@@ -918,6 +922,7 @@ export async function runChatAgent(
       for (const call of renderCalls) {
         const looks = normalizeOutfits(extractShowOutfits(call.arguments), allIds);
         onEvent?.({ type: "tool_call", name: "show_outfits", label: "Laying out looks" });
+        await pause();
         const summary = looks.length > 0 ? `${looks.length} ${looks.length === 1 ? "look" : "looks"}` : "No cards rendered";
         messages.push({ role: "tool", tool_call_id: call.id, content: summary });
         onEvent?.({ type: "tool_result", name: "show_outfits", summary });
