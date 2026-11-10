@@ -1,5 +1,5 @@
 import { adaptiveColors, radius, Button, ModalHeader, NativeSwitch, Screen } from "@/components/ui";
-import { aesthetics } from "@/data/mock";
+import { vibesFor } from "@/services/vibes";
 import { useCloset } from "@/state/closet-context";
 import { SymbolView } from "expo-symbols";
 import * as Haptics from "expo-haptics";
@@ -28,7 +28,8 @@ const paletteOptions = [
 ];
 
 export default function StyleQuizScreen() {
-  const { stylePreferences, setStylePreferences } = useCloset();
+  const { stylePreferences, setStylePreferences, profile } = useCloset();
+  const aesthetics = vibesFor(profile.presentation);
   const [step, setStep] = useState(0);
   const [selectedAesthetics, setSelectedAesthetics] = useState<string[]>(stylePreferences);
   const [selectedPriorities, setSelectedPriorities] = useState<string[]>([]);
@@ -54,7 +55,7 @@ export default function StyleQuizScreen() {
   };
 
   return (
-    <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
+    <Screen modal>
       <ModalHeader title="Style profile" subtitle="Personalize your wardrobe suggestions." />
       <View style={{ gap: 4 }}>
         <View style={{ flexDirection: "row", gap: 4 }}>

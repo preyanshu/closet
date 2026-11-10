@@ -32,7 +32,7 @@ export default function LookDetailScreen() {
   const sourceLabel = outfit.source === "mine" ? "Custom" : outfit.source === "saved" ? "Saved" : "Today's pick";
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: adaptiveColors.canvas }} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ gap: 24, paddingHorizontal: 24, paddingBottom: 88, paddingTop: 20 }}>
+    <ScrollView style={{ flex: 1, backgroundColor: adaptiveColors.canvas }} contentInsetAdjustmentBehavior="never" contentContainerStyle={{ gap: 24, paddingHorizontal: 20, paddingBottom: 88, paddingTop: 20 }}>
       <ModalHeader title="Look details" subtitle="Review the pieces in this outfit." />
       <View style={{ gap: 4 }}>
         <Text style={{ fontSize: 28, fontWeight: "800", color: adaptiveColors.label, letterSpacing: -0.7 }}>{outfit.label}</Text>
@@ -56,13 +56,13 @@ export default function LookDetailScreen() {
         {outfitItems.map(({ item, layerOrder }) => (
           <Card key={item.id} className="flex-row items-center gap-3 rounded-[18px] p-3">
             <View style={{ width: 68, height: 68, borderRadius: 12, overflow: "hidden", backgroundColor: adaptiveColors.surfaceMuted }}>
-              <Image source={getItemImageSource(item.displayAssetUri)} contentFit="cover" style={{ width: "100%", height: "100%" }} />
+              <Image source={itemImageSource(item.displayAssetUri)} contentFit="cover" style={{ width: "100%", height: "100%" }} />
             </View>
             <View style={{ flex: 1, gap: 5 }}>
               <Text style={{ fontSize: 15, fontWeight: "800", color: adaptiveColors.label }}>{item.name}</Text>
               <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{categoryLabels[item.category]} · {formatTag(item.primaryColor)}</Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-                <InfoChip label={roleLabels[item.role]} small />
+                <InfoChip label={layerOrder != null && layerOrder > 1 && item.role === "base_top" ? "Layer" : roleLabels[item.role]} small />
                 {item.styleTags.slice(0, 3).map((aesthetic) => <InfoChip key={aesthetic} label={formatTag(aesthetic)} small />)}
               </View>
             </View>
@@ -111,12 +111,4 @@ function resolveOutfitItems(outfit: DetailOutfit | undefined, items: Item[]): Ar
     .map((ref) => ({ ref, item: items.find((item) => item.id === ref.itemId) }))
     .filter((entry): entry is { ref: LookItemRef; item: Item } => Boolean(entry.item))
     .map(({ ref, item }) => ({ item, layerOrder: ref.layerOrder }));
-}
-
-function getItemImageSource(imageUrl: string) {
-  if (imageUrl.includes("item-1")) return require("@/assets/item-1.png");
-  if (imageUrl.includes("item-2")) return require("@/assets/item-2.png");
-  if (imageUrl.includes("item-3")) return require("@/assets/item-3.png");
-  if (imageUrl.includes("item-4")) return require("@/assets/item-4.png");
-  return { uri: imageUrl };
 }

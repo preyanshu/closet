@@ -1,5 +1,6 @@
 import { adaptiveColors, radius, Card, Screen, SectionHeader, WardrobeIcon } from "@/components/ui";
 import { aesthetics, categoryLabels, type ClothingCategory } from "@/data/mock";
+import { vibesFor } from "@/services/vibes";
 import { useCloset } from "@/state/closet-context";
 import { SymbolView } from "expo-symbols";
 import * as Haptics from "expo-haptics";
@@ -14,7 +15,8 @@ const occasionPresets = [
 ];
 
 export default function StyleScreen() {
-  const { items } = useCloset();
+  const { items, profile } = useCloset();
+  const allowedVibes = new Set(vibesFor(profile.presentation).map((vibe) => vibe.id));
 
   const gaps = findWardrobeGaps(items);
 
@@ -85,7 +87,7 @@ export default function StyleScreen() {
 
       <View style={{ gap: 10 }}>
         <Text style={{ fontSize: 13, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5 }}>Style directions</Text>
-        {aesthetics.map((aesthetic) => {
+        {aesthetics.filter((aesthetic) => allowedVibes.has(aesthetic.id)).map((aesthetic) => {
           const count = items.filter((i) => i.styleTags.includes(aesthetic.id)).length;
           return (
             <Card key={aesthetic.id} className="gap-3">

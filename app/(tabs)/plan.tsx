@@ -1,6 +1,7 @@
-import { adaptiveColors, radius, GlassButton, Screen, SectionHeader, Sheet, WardrobeIcon } from "@/components/ui";
+import { adaptiveColors, radius, GlassButton, PageHeader, Screen, Sheet, WardrobeIcon } from "@/components/ui";
 import { type Item, type Outfit } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
@@ -49,15 +50,17 @@ export default function PlanScreen() {
   };
 
   return (
-    <Screen scroll={false}>
-      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ gap: 24, paddingHorizontal: 24, paddingBottom: 140, paddingTop: 28 }}>
-        <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-          <SectionHeader eyebrow="Plan" title="Style calendar" />
-          <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
-            <GlassButton icon="flame.fill" label="Style streak" value="0" onPress={() => {}} />
-            <GlassButton icon="square.and.arrow.up" label="Share plan" onPress={() => router.push("/outfits")} />
-          </View>
-        </View>
+    <Screen>
+        <PageHeader
+          eyebrow="Plan"
+          title="Style calendar"
+          right={
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <GlassButton icon="flame.fill" label="Style streak" value="0" onPress={() => {}} />
+              <GlassButton icon="square.and.arrow.up" label="Share plan" onPress={() => router.push("/outfits")} />
+            </View>
+          }
+        />
 
         <View style={{ flexDirection: "row", gap: 28, borderBottomWidth: 1, borderColor: adaptiveColors.border, paddingBottom: 18 }}>
           <MiniInsight title="Most worn" value={mostWorn?.name ?? "Nothing yet"} imageUrl={mostWorn?.displayAssetUri} />
@@ -202,8 +205,6 @@ export default function PlanScreen() {
             />
           </View>
         )}
-
-      </ScrollView>
 
       <OutfitPickerSheet
         visible={pickerDay !== null}

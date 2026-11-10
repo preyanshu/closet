@@ -91,6 +91,12 @@ export type Item = {
   subcategory?: string;
   /** Renders into the builder as base_top / mid_layer / outer / bottom / footwear / jewelry… */
   role: ItemRole;
+  /**
+   * Other jobs this piece can do in a look, e.g. a button-up shirt is a
+   * base_top that can also be worn open as a mid_layer. `undefined` means not
+   * decided yet (older items; backfilled on load). `[]` means decided: none.
+   */
+  alternateRoles?: ItemRole[];
   primaryColor: string;
   secondaryColors: string[];
   /** Style-level tags only (minimal, classic, sporty). Occasion/formality stay separate. */
@@ -109,6 +115,9 @@ export type Item = {
   brand?: string;
   /** Source-of-truth photo (camera, library, import). Never replaced by staging. */
   originalAssetUri: string;
+  /** Where the photos live in cloud storage. The `...Uri` fields are what the app shows (a signed link, or a local file until it uploads). */
+  originalAssetPath?: string;
+  displayAssetPath?: string;
   /** Clean thumb/segmented display version. The original stays available. */
   displayAssetUri: string;
   priceMinor: number | null;
@@ -140,6 +149,8 @@ export type OutfitMetadata = {
   season?: string;
   palette?: string;
   stylingNote?: string;
+  /** Vibe labels (minimal, office…) the stylist gave this look; Home chips filter on them. */
+  vibes?: string[];
   demo?: boolean;
 };
 

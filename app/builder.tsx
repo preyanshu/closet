@@ -1,4 +1,4 @@
-import { Button, CircularGlassButton, EmptyState, ItemImage, Screen, WardrobeIcon, motion, radius, spacing, type as typography } from "@/components/ui";
+import { Button, CircularGlassButton, EmptyState, ItemImage, ModalHeader, Screen, WardrobeIcon, motion, radius, spacing, type as typography } from "@/components/ui";
 import { aesthetics, categoryLabels, type ClothingCategory, type Item, type Outfit } from "@/data/mock";
 import { composeOutfits } from "@/services/outfit-engine";
 import { useCloset } from "@/state/closet-context";
@@ -100,11 +100,6 @@ export default function BuilderScreen() {
     const controller = new AbortController(); request.current = controller;
     setError(undefined); setPhase("generating"); scrollRef.current?.scrollTo({ y: 0, animated: true });
     try {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => { controller.signal.removeEventListener("abort", cancel); resolve(); }, 900);
-        const cancel = () => { clearTimeout(timer); reject(new Error("Cancelled")); };
-        controller.signal.addEventListener("abort", cancel, { once: true });
-      });
       if (controller.signal.aborted) return;
       const looks = composeOutfits(
         {
@@ -156,17 +151,11 @@ export default function BuilderScreen() {
         style={{ flex: 1 }}
         contentContainerStyle={[styles.content, phase === "generating" && { flexGrow: 1, paddingBottom: Math.max(insets.bottom, spacing.xl) }]}
       >
-        <View style={styles.header}>
-          <View style={{ flex: 1, gap: 6 }}>
-            <Text accessibilityRole="header" style={[styles.title, { color: colors.label }]}>
-              {phase === "preview" ? "Pick your favorite." : phase === "generating" ? "Coming together." : "Make it yours."}
-            </Text>
-            <Text style={{ ...typography.callout, fontWeight: "400", color: colors.secondaryLabel }}>
-              {phase === "preview" ? "Three looks built around what you picked." : phase === "generating" ? "Composing from your closet." : "Your wardrobe. A new combination."}
-            </Text>
-          </View>
-          <CircularGlassButton icon="xmark" label="Close outfit builder" onPress={close} />
-        </View>
+        <ModalHeader
+          title={phase === "preview" ? "Pick your favorite." : phase === "generating" ? "Coming together." : "Make it yours."}
+          subtitle={phase === "preview" ? `${suggestions.length === 1 ? "One look" : `${suggestions.length} looks`} built around what you picked.` : phase === "generating" ? "Composing from your closet." : "Your wardrobe. A new combination."}
+          onClose={close}
+        />
 
         {phase === "select" ? (
           <View style={{ gap: spacing.md }}>
@@ -315,7 +304,7 @@ export default function BuilderScreen() {
                 {phase === "preview" ? "Keep this combination" : "See outfit ideas"}
               </Text>
             </View>
-            <Button onPress={phase === "preview" ? save : generate} disabled={!chosen.length} style={[styles.primaryButton, stacked ? undefined : { minWidth: 148 }]}>
+            <Button onPress={phase === "preview" ? save : generate} disabled={!chosen.length} style={stacked ? undefined : { minWidth: 148 }}>
               {phase === "preview" ? "Save look" : "Generate"}
             </Button>
           </View>
@@ -327,8 +316,6 @@ export default function BuilderScreen() {
 
 const styles = StyleSheet.create({
   content: { width: "100%", maxWidth: 640, alignSelf: "center", gap: spacing.xl, paddingHorizontal: spacing.lg, paddingTop: spacing.xl, paddingBottom: spacing.xl },
-  header: { flexDirection: "row", alignItems: "center", gap: spacing.md },
-  title: { fontSize: 30, lineHeight: 36, fontWeight: "700", letterSpacing: -1.1 },
   tabs: { gap: 24 },
   tab: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: 5, borderBottomWidth: 2, paddingBottom: 3 },
   browseHint: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
@@ -346,5 +333,4 @@ const styles = StyleSheet.create({
   selectionTray: { gap: spacing.xs, paddingRight: spacing.xs },
   removeBadge: { position: "absolute", top: 2, right: 0, width: 18, height: 18, alignItems: "center", justifyContent: "center", borderRadius: radius.pill },
   footerInner: { flexDirection: "row", gap: spacing.md, alignItems: "center" },
-  primaryButton: { borderRadius: radius.pill },
 });

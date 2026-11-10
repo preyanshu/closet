@@ -1,4 +1,4 @@
-import { adaptiveColors, radius, Card, GlassButton, ModalHeader, NativePicker, Screen } from "@/components/ui";
+import { adaptiveColors, radius, Card, EmptyState, GlassButton, ModalHeader, FilterChip, Screen } from "@/components/ui";
 import { useCloset } from "@/state/closet-context";
 import { SymbolView } from "expo-symbols";
 import { Pressable, Text, View } from "react-native";
@@ -14,18 +14,20 @@ export default function SavedLooksScreen() {
   const displayList = tab === "alta" ? savedOutfits : myLooks;
 
   return (
-    <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
+    <Screen modal>
       <ModalHeader title="Saved looks" subtitle="Your favorite and custom outfits." />
 
-      <NativePicker value={tab} onValueChange={setTab} options={[{ label: "Alta Looks", value: "alta" }, { label: "My Looks", value: "mine" }]} label="Look source" />
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <FilterChip label="Alta Looks" selected={tab === "alta"} onPress={() => setTab("alta")} />
+        <FilterChip label="My Looks" selected={tab === "mine"} onPress={() => setTab("mine")} />
+      </View>
 
       {displayList.length === 0 ? (
-        <Card className="items-center gap-2 py-10">
-          <SymbolView name={tab === "alta" ? "heart" : "plus.circle"} tintColor="rgba(0,0,0,0.15)" style={{ width: 40, height: 40 }} />
-          <Text style={{ fontSize: 15, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>
-            {tab === "alta" ? "Heart outfits on Today to save them" : "Build an outfit in the Closet tab"}
-          </Text>
-        </Card>
+        <EmptyState
+          icon={tab === "alta" ? "heart" : "plus.circle"}
+          title={tab === "alta" ? "No saved looks yet" : "No looks of your own yet"}
+          message={tab === "alta" ? "Tap the plus on a look in Today to save it here." : "Build an outfit from your closet and it will show up here."}
+        />
       ) : (
         <View style={{ gap: 12 }}>
           {displayList.map((outfit) => {

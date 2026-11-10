@@ -37,7 +37,7 @@ export default function AnalyticsScreen() {
   const dominantPercent = totalValue > 0 ? Math.round((dominant.value / totalValue) * 100) : 0;
 
   return (
-    <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
+    <Screen modal>
       <ModalHeader title="Wardrobe analytics" subtitle="See the value and wear of your closet." />
 
       <View style={{ borderRadius: 28, borderCurve: "continuous", overflow: "hidden", backgroundColor: "#0E0D0B", padding: 26, gap: 18, boxShadow: "0 24px 48px rgba(0, 0, 0, 0.2)" }}>

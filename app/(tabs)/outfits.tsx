@@ -1,6 +1,7 @@
-import { adaptiveColors, radius, spacing, CircularGlassButton, FilterChip, ItemImage, WardrobeIcon } from "@/components/ui";
+import { adaptiveColors, radius, spacing, Button, CircularGlassButton, EmptyState, FilterChip, PageHeader, ItemImage, WardrobeIcon } from "@/components/ui";
 import { type Item, type Outfit } from "@/data/mock";
 import { useCloset } from "@/state/closet-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { itemImageSource } from "@/services/item-image";
@@ -13,7 +14,8 @@ type Filter = (typeof filters)[number];
 type LibraryOutfit = Omit<Outfit, "source"> & { source: "saved" | "mine" };
 
 export default function OutfitsScreen() {
-  const { items, myLooks, savedLooks, toggleSavedLook, isSavedLook } = useCloset();
+  const insets = useSafeAreaInsets();
+  const { items, myLooks, savedLooks, toggleFavoriteLook, isFavoriteLook } = useCloset();
   const [filter, setFilter] = useState<Filter>("All");
   const [gridWidth, setGridWidth] = useState(0);
   const [pressedId, setPressedId] = useState<string | null>(null);
@@ -29,13 +31,13 @@ export default function OutfitsScreen() {
 
   const filteredOutfits = outfits.filter((outfit) => {
     if (filter === "All") return true;
-    if (filter === "Favorites") return isSavedLook(outfit.id);
+    if (filter === "Favorites") return isFavoriteLook(outfit.id);
     return (outfit.tags ?? []).includes(filter);
   });
 
   const countFor = (nextFilter: Filter) => {
     if (nextFilter === "All") return outfits.length;
-    if (nextFilter === "Favorites") return outfits.filter((outfit) => isSavedLook(outfit.id)).length;
+    if (nextFilter === "Favorites") return outfits.filter((outfit) => isFavoriteLook(outfit.id)).length;
     return outfits.filter((outfit) => (outfit.tags ?? []).includes(nextFilter)).length;
   };
   const gap = spacing.sm;
@@ -43,15 +45,13 @@ export default function OutfitsScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: adaptiveColors.canvas }}>
-      <ScrollView contentInsetAdjustmentBehavior="automatic" showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xl, paddingHorizontal: spacing.lg, paddingTop: spacing.xl, paddingBottom: 160 }}>
-        <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: spacing.md }}>
-          <View style={{ flex: 1, gap: 3 }}>
-            <Text style={{ fontSize: 11, fontWeight: "800", letterSpacing: 2, color: adaptiveColors.secondaryLabel, textTransform: "uppercase" }}>Outfit library</Text>
-            <Text style={{ fontSize: 36, lineHeight: 40, fontWeight: "800", letterSpacing: -1.4, color: adaptiveColors.label }}>Outfits</Text>
-            <Text style={{ fontSize: 13, lineHeight: 18, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{outfits.length} {outfits.length === 1 ? "look" : "looks"} ready to wear</Text>
-          </View>
-          <CircularGlassButton icon="plus" label="Build outfit" onPress={() => router.push("/builder")} />
-        </View>
+      <ScrollView contentInsetAdjustmentBehavior="never" showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xl, paddingHorizontal: spacing.lg, paddingTop: insets.top + spacing.xl, paddingBottom: 160 }}>
+        <PageHeader
+          eyebrow="Outfit library"
+          title="Outfits"
+          subtitle={`${outfits.length} ${outfits.length === 1 ? "look" : "looks"} ready to wear`}
+          right={<CircularGlassButton icon="plus" label="Build outfit" onPress={() => router.push("/builder")} />}
+        />
 
         <View style={{ marginHorizontal: -spacing.lg }}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.lg, paddingVertical: 2 }}>
@@ -68,9 +68,9 @@ export default function OutfitsScreen() {
           <View onLayout={(event) => setGridWidth(event.nativeEvent.layout.width)} style={{ width: "100%", flexDirection: "row", flexWrap: "wrap", columnGap: gap, rowGap: spacing.xl }}>
             {filteredOutfits.map((outfit) => {
               const outfitItems = outfit.itemIds.map((id) => items.find((item) => item.id === id)).filter((item): item is Item => Boolean(item));
-              const favorite = isSavedLook(outfit.id);
+              const favorite = isFavoriteLook(outfit.id);
               const key = `${outfit.source}-${outfit.id}`;
-              return <OutfitCard key={key} outfit={outfit} items={outfitItems} favorite={favorite} width={columnWidth} pressed={pressedId === key} onPressIn={() => setPressedId(key)} onPressOut={() => setPressedId(null)} onPress={() => router.push(`/look/${outfit.id}`)} onFavorite={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); toggleSavedLook(outfit.id, outfit); }} />;
+              return <OutfitCard key={key} outfit={outfit} items={outfitItems} favorite={favorite} width={columnWidth} pressed={pressedId === key} onPressIn={() => setPressedId(key)} onPressOut={() => setPressedId(null)} onPress={() => router.push(`/look/${outfit.id}`)} onFavorite={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); toggleFavoriteLook(outfit.id); }} />;
             })}
           </View>
         ) : <EmptyLooks filter={filter} onClear={() => setFilter("All")} onBuild={() => router.push("/builder")} />}
@@ -114,11 +114,11 @@ function OutfitArtwork({ items }: { items: Item[] }) {
 function EmptyLooks({ filter, onClear, onBuild }: { filter: Filter; onClear: () => void; onBuild: () => void }) {
   const filtered = filter !== "All";
   return (
-    <View style={{ alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.xl, paddingVertical: spacing.xxxl }}>
-      <View style={{ width: 60, height: 60, borderRadius: 20, borderCurve: "continuous", alignItems: "center", justifyContent: "center", backgroundColor: adaptiveColors.surfaceMuted }}><WardrobeIcon name="photo.on.rectangle.angled" color={adaptiveColors.tertiaryLabel} size={26} /></View>
-      <Text style={{ fontSize: 18, lineHeight: 23, fontWeight: "700", color: adaptiveColors.label, textAlign: "center" }}>{filtered ? `No ${filter.toLowerCase()} looks` : "No outfits yet"}</Text>
-      <Text style={{ maxWidth: 280, fontSize: 13, lineHeight: 19, fontWeight: "500", color: adaptiveColors.secondaryLabel, textAlign: "center" }}>{filtered ? "Try another filter or browse your full outfit library." : "Build your first outfit from pieces in your closet."}</Text>
-      <Pressable accessibilityRole="button" onPress={filtered ? onClear : onBuild} style={{ minHeight: 48, marginTop: spacing.xs, paddingHorizontal: 22, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: adaptiveColors.accent }}><Text style={{ fontSize: 14, lineHeight: 19, fontWeight: "700", color: adaptiveColors.onAccent }}>{filtered ? "View all outfits" : "Build an outfit"}</Text></Pressable>
-    </View>
+    <EmptyState
+      icon="photo.on.rectangle.angled"
+      title={filtered ? `No ${filter.toLowerCase()} looks` : "No outfits yet"}
+      message={filtered ? "Try another filter or browse your full outfit library." : "Build your first outfit from pieces in your closet."}
+      action={<Button variant={filtered ? "secondary" : "primary"} onPress={filtered ? onClear : onBuild}>{filtered ? "View all outfits" : "Build an outfit"}</Button>}
+    />
   );
 }

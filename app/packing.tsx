@@ -51,7 +51,7 @@ export default function PackingScreen() {
   const template = selectedOccasion ? packingTemplate[selectedOccasion] : null;
 
   return (
-    <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
+    <Screen modal>
       <ModalHeader title="Plan a trip" subtitle="Build a packing list from your closet." />
 
       <NativePicker value={selectedOccasion ?? "none"} onValueChange={(value) => setSelectedOccasion(value === "none" ? null : value)} options={occasionOptions} label="Trip type" />

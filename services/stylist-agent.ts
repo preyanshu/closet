@@ -1,5 +1,8 @@
 import type { Item, Outfit } from "@/data/mock";
 import { describeWeather, type WeatherSummary } from "@/services/weather";
+import { isLayerCapable, roleWithMarker } from "@/services/item-roles";
+import { cleanVibes } from "@/services/item-options";
+import { allowedVibeIds } from "@/services/vibes";
 import type { WearerPresentation } from "@/types/domain";
 import { runStyleTurn, runStyleTurnStream, WardrobeApiError } from "@/services/api/wardrobe-api";
 
@@ -43,7 +46,7 @@ function costPerWear(item: Item): string {
 export function itemFullLine(item: Item, isFavorite: boolean): string {
   const secondary = item.secondaryColors.length ? ` +${item.secondaryColors.join("+")}` : "";
   return [
-    item.id, item.name, `${item.category}/${item.subcategory ?? "-"}`, item.role,
+    item.id, item.name, `${item.category}/${item.subcategory ?? "-"}`, roleWithMarker(item),
     `${item.primaryColor}${secondary}`, item.pattern ?? "-", item.fit ?? "-",
     item.sleeveLength ?? "-", item.visibleTexture ?? "-", item.formality ?? "-",
     item.warmthBand ?? "-", item.styleTags.join("/") || "-",
@@ -57,7 +60,7 @@ export function itemFullLine(item: Item, isFavorite: boolean): string {
 export function itemIndexLine(item: Item, isFavorite: boolean): string {
   const secondary = item.secondaryColors.length ? ` +${item.secondaryColors.join("+")}` : "";
   return [
-    item.id, item.name, item.role, `${item.primaryColor}${secondary}`,
+    item.id, item.name, roleWithMarker(item), `${item.primaryColor}${secondary}`,
     item.formality ?? "-", item.warmthBand ?? "-", item.styleTags.join("/") || "-",
     `worn ${item.wearCount}x`, isFavorite ? "fav" : "-",
   ].join(" | ");
@@ -109,6 +112,7 @@ export const STYLIST_TOOLS: Array<Record<string, unknown>> = [
           warmth: { type: "string", description: "light | medium | heavy" },
           query: { type: "string", description: "Free-text substring match on name" },
           favorites_only: { type: "boolean" },
+          can_layer: { type: "boolean", description: "true = only pieces that can be worn as a layer over another top (shirts, overshirts, knits, cardigans, hoodies, vests). Their role shows as base_top+layer." },
           include_unavailable: { type: "boolean", description: "Default false — laundry/packed items are excluded" },
           page: { type: "integer", description: "1-based page number" },
           page_size: { type: "integer", description: "Default 20, max 40" },
@@ -174,6 +178,7 @@ const SHOW_OUTFITS_TOOL: Record<string, unknown> = {
               items: { type: "array", items: { type: "string" }, description: "Real item ids from tool results" },
               label: { type: "string", description: "Short look name" },
               reason: { type: "string", description: "One grounded sentence about the pieces in this look" },
+              vibes: { type: "array", items: { type: "string" }, description: "1 to 3 vibes this look reads as, from vibes_allowed in the request" },
             },
             required: ["items", "label", "reason"],
           },
@@ -207,6 +212,7 @@ function buildOverview(wardrobe: ToolWardrobe): string {
   return [
     `total_items: ${pool.length} wearable (of ${wardrobe.items.length} owned)`,
     `roles: ${hist(byRoleCount)}`,
+    `layer_capable: ${pool.filter(isLayerCapable).length} pieces can be worn as a layer (role shows +layer)`,
     `palette: ${hist(palette)}`,
     `style_tags: ${hist(tags)}`,
     favorites.length ? `favorites:\n${favorites.map((item) => itemIndexLine(item, true)).join("\n")}` : "favorites: none",
@@ -229,8 +235,10 @@ function runSearchTool(args: Record<string, unknown>, wardrobe: ToolWardrobe): s
   const warmth = typeof args.warmth === "string" ? args.warmth : null;
   const query = typeof args.query === "string" ? args.query.toLowerCase() : null;
   const favoritesOnly = Boolean(args.favorites_only);
+  const canLayer = args.can_layer === true || args.can_layer === "true";
 
   const active = {
+    can_layer: canLayer,
     warmth: Boolean(warmth),
     formality: Boolean(formality),
     style_tags: styleTags.length > 0,
@@ -240,6 +248,7 @@ function runSearchTool(args: Record<string, unknown>, wardrobe: ToolWardrobe): s
   };
 
   const matches = (item: Item, flags: typeof active): boolean => {
+    if (flags.can_layer && !isLayerCapable(item)) return false;
     if (flags.role && role && item.role !== role) return false;
     if (flags.category && category && item.category !== category) return false;
     if (flags.colors && colors.length > 0) {
@@ -263,6 +272,7 @@ function runSearchTool(args: Record<string, unknown>, wardrobe: ToolWardrobe): s
   // hits directly — one wasted turn here costs a whole agent session.
   if (filtered.length === 0 && !query && !favoritesOnly) {
     const order: Array<[keyof typeof active, string]> = [
+      ["can_layer", "can_layer=true"],
       ["warmth", `warmth=${warmth}`],
       ["colors", `colors=${colors.join("/")}`],
       ["style_tags", `style_tags=${styleTags.join("/")}`],
@@ -359,7 +369,7 @@ export function runTool(name: AgentToolName | string, rawArgs: Record<string, un
   }
 }
 
-function parseJsonPayload(text: string): { reply?: string; outfits?: Array<{ items?: string[]; label?: string; reason?: string }> } | null {
+function parseJsonPayload(text: string): { reply?: string; outfits?: Array<{ items?: string[]; label?: string; reason?: string; vibes?: unknown }> } | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
@@ -448,7 +458,7 @@ function extractOutfitsLoose(text: string): { reply?: string; outfits: Array<{ i
   return { reply: extractReplyLoose(text), outfits: [...found.values()] };
 }
 
-export type RawStyleOutfit = { items: string[]; label: string; reason: string };
+export type RawStyleOutfit = { items: string[]; label: string; reason: string; vibes?: string[] };
 
 export type StylistAgentResult = {
   outfits: RawStyleOutfit[];
@@ -466,19 +476,27 @@ PROCESS:
 
 JUDGMENT (this is styling, not a checklist):
 - Style the whole picture: the occasion, the weather, the season, and their taste (favorites, saved looks, what they actually reach for).
-- Compose only looks you genuinely believe are excellent. Real stylists are selective — never pad, never repeat a silhouette. Return your best 3 to 5 looks, and fewer if only a few are truly good.
+- Compose only looks you genuinely believe are excellent. Real stylists are selective — never pad, never repeat a silhouette. Return your best looks (the request says how many), and fewer if only a few are truly good.
 - Occasion and weather live in the ensemble, not in any single item. A plain piece can be perfect in the right combination and a "dressy" piece can look wrong. Trust your eye, be creative, and surprise them sometimes.
 - Decide for yourself what reads well — there are no formulas.
+
+LAYERING (use it, this is where good looks come from):
+- A piece's listed role is only its usual job. Shirts, overshirts, flannels, knits, cardigans and hoodies can be a base OR a layer. Fair game: a button-up worn open or knotted over a tee or tank, a tee under an unbuttoned shirt, a knit over a collared shirt, a vest or jacket on top of any of these.
+- Tanks, tees and camisoles are only ever a base, never a layer.
+- Pieces whose role shows "+layer" (for example base_top+layer) are confirmed to work as a layer over another top. Use search_items with can_layer=true to find them. A "+base" marker (for example outer_layer+base) means a layering piece the owner also wears as the base top. Do not limit layers to items whose role is mid_layer or outer_layer.
+- When you layer two tops, list the base FIRST and the layer SECOND in "items" (at most two tops, plus an optional outer layer), and say how it is worn in the reason, e.g. "worn open over the white tee".
+- Be inventive: reuse a hero piece in different roles across looks, vary the silhouette and formality, and change the mood with a belt, hat, bag or jewelry. Avoid handing back three near-identical tee-and-jeans looks.
 
 INTERFACE RULES (technical, always true):
 - Use ONLY item ids returned by tools. Never invent an id.
 - Each look: either exactly one "one_piece", OR one "base_top" AND one "bottom". Always include exactly one "footwear".
-- One item per slot — never two bottoms, two tops, two pairs of shoes, or two of the same accessory. Layers and accessories are optional accents.
+- One item per slot — never two bottoms, two pairs of shoes, or two of the same accessory. The single exception is layering: a look may have a second top worn OVER the first (see LAYERING). Accessories are optional accents.
 - 3 to 6 pieces per look.
 - Do not use items the tools hide as unavailable.
 
 When ready, reply with ONLY valid JSON (no prose, no fences):
-{"reply":"One or two sentences of stylist reasoning for the user.","outfits":[{"items":["id","id"],"label":"Short label","reason":"One grounded sentence."}]}
+{"reply":"One or two sentences of stylist reasoning for the user.","outfits":[{"items":["id","id"],"label":"Short label","reason":"One grounded sentence.","vibes":["minimal"]}]}
+"vibes" is 1 to 3 from the vibes_allowed list in the request. Pick the vibes each look genuinely reads as, judged on the whole ensemble, not on single pieces.
 The label and reason must describe only the pieces actually listed in that look's "items" — never name a garment you did not include. Ground every claim in attributes you actually saw.`;
 
 function parseLooseJsonOutfits(text: string): Array<{ items: string[]; label: string; reason: string }> {
@@ -529,7 +547,7 @@ function parseOutfitLines(text: string): Array<{ items: string[]; label: string;
 }
 
 function cleanReply(value: string): string {
-  return redactItemIds(value.replace(/\n{3,}/g, "\n\n"));
+  return sanitizeChatText(value.replace(/\n{3,}/g, "\n\n"));
 }
 
 function parseChatPayload(text: string): { reply: string; outfits: Array<{ items?: string[]; label?: string; reason?: string }> } {
@@ -574,32 +592,66 @@ function parseChatPayload(text: string): { reply: string; outfits: Array<{ items
   return { reply: cleanReply(prose), outfits: [] };
 }
 
-export const CHAT_SYSTEM = `You are Alta, the user's personal stylist inside their wardrobe app. You are a genuinely helpful conversational assistant — equal parts stylist, closet expert, and friend with good taste. Talk naturally, answer the actual question, and explain your reasoning. Do not force outfit suggestions into every reply.
+export const CHAT_SYSTEM = `You are Alta, the user's personal stylist inside their wardrobe app. You are a genuinely helpful conversational assistant, equal parts stylist, closet expert, and friend with good taste. Talk naturally and answer the actual question, briefly. Give your reasoning in a line, not an essay. Do not force outfit suggestions into every reply.
+
+MATCH THE MOMENT:
+- Greetings, thanks, banter, or a vague message ("yo", "hey", "what's up", "ok") get a short, warm, human reply of one or two sentences. No tools, no outfits, no wardrobe analysis, and do not offer to build looks or say you are putting combinations together. You may end with a light, open question.
+- Build or show outfits ONLY when the user asks for outfit ideas, what to wear, or to style or swap something. Never announce that you are building or creating outfits unless they asked.
 
 TOOLS (the phone is the tool host):
 - You cannot see the closet until you ask for it. Use the tools whenever an answer depends on what the user actually owns: their pieces, colors, formality, warmth, what's clean or packed, favorites, past looks.
 - get_wardrobe_overview for the map, search_items to find pieces, get_items / get_item for detail, get_saved_looks for their taste memory.
 - show_outfits renders the actual outfit cards with images. It is the only way to show looks.
 - Never invent an item, id, color, or attribute. Only state facts returned by tools.
+- Never tell the user they do not own something after one empty search. Retry once with fewer filters (just a short query or just the role) first. Only say a piece is missing when that broader search also finds nothing.
 - Simple greetings, thanks, or general style theory do not need tools; wardrobe-specific claims always do.
+- When a request genuinely needs your wardrobe, write ONE short natural sentence before your first tool call about what you are checking (for example: "Let me look through your tops."). That sentence may only say what you are about to check. Never state or guess a result, such as whether the user owns something, before the tools have returned.
+- Write your reply ONCE. After a tool returns, never repeat or re-introduce anything you already wrote earlier in this turn; continue with only what is new, or go straight to the answer.
 
 WHEN TO INCLUDE OUTFITS:
 - When the user asks for outfit ideas, what to wear, or to style/swap a look, write a short natural reply, then call show_outfits with the complete structured looks.
+- The cards already show every piece, the label and the reason. So when you call show_outfits, your reply must NOT list, name, or describe the individual looks or repeat what the cards say. Write one or two sentences of framing only (what you optimized for, a styling tip that applies to all of them, or a question about what to adjust). Never write the outfits out as text first.
 - When they ask a question (does this go together, is this right for an occasion, what's missing, how to care for a piece, packing advice), just answer in your reply text and do not call show_outfits. Add cards only if they genuinely make the answer better.
-- If they ask to adjust a previous look ("swap the shoes", "make it more casual"), revise that look using the conversation history.
+- Any time you propose or revise a specific combination of their pieces, show it as a card with show_outfits, even for follow-ups like "what if I layer it with my shirt", "swap the shoes" or "make it more casual". Revise the previous look using the conversation history, give one sentence of framing, and let the card carry the detail. Never describe a combination in text instead of showing it.
+- Never repeat a question or offer you already made. If the user declines ("no", "naah", "nope"), acknowledge in a few words and move on: offer one genuinely different idea or ask what they would prefer.
 - If the wardrobe genuinely cannot support the request, say what is missing and why instead of inventing a look.
 
 STYLE JUDGMENT:
 - Style the whole picture: occasion, weather, season, and their taste. Compose only looks you believe are excellent; 3 to 5 at most, fewer is fine.
-- Each look: either one "one_piece", or one "base_top" and one "bottom". Always exactly one "footwear". 3 to 6 pieces. One item per slot. Layers and accessories are optional.
+- Each look: either one "one_piece", or one "base_top" and one "bottom". Always exactly one "footwear". 3 to 6 pieces. One item per slot, with one exception: layering.
+- Layering is encouraged. A shirt, overshirt, flannel, knit, cardigan or hoodie can be worn as a base or as a layer, even when its stored role is base_top: a button-up open over a tee or tank, a tee under an unbuttoned shirt, a knit over a collared shirt. You may use two tops in a look when the second is worn over the first. List the base first, then the layer, and say how it is worn in the reason ("worn open over the white tee"). Pieces whose role shows "+layer" (like base_top+layer) are confirmed layer-capable, and search_items with can_layer=true finds them. A "+base" marker (like outer_layer+base) means a layering piece that can also be the base top. Also add a belt, hat, bag or jewelry when it changes the mood, and vary silhouettes instead of repeating one formula.
+- A tank, tee or camisole is only ever a base, never a layer, and "worn open" only applies to a button-up, cardigan or similar. Do not suggest wearing a tank over a tee.
+- When the user names a kind of piece ("the shirt I have", "my black jacket"), search_items for exactly that before you answer. Describe every piece exactly as the tools returned it, same name and color. Never rename or recolor an item.
 - Never use an item the tools hide as unavailable.
 
 REPLY FORMAT:
-- Write your reply as plain text exactly as it should appear in the chat: usually a short paragraph, simple dashes for lists, no markdown, no JSON, no fences.
+- This is a phone chat. Be SHORT and scannable. Default to 1 to 3 short sentences, about 60 words or fewer. Go longer only when the user asks for depth, and even then stay structured.
+- Lead with the answer or recommendation in the first line. Put the key takeaway in **bold**. No warm-up ("Great question", "Sure!", "Absolutely"), no restating the question, no closing recap, and no repeated offers of more help. End with at most one short follow-up question, and only if it is useful.
+- Never write a paragraph longer than 2 sentences. Put a blank line between ideas.
+- Use a "-" bullet list when you give 3 or more reasons, options, tips, or steps. Keep it to 3 to 5 bullets of about 12 words or fewer, each starting with a **bold label** and then the detail. Do not bury a list inside a paragraph.
+- NEVER use a list or any text to itemize the pieces of an outfit, and never write internal labels such as base_top, bottom, footwear, one_piece or mid_layer. Outfits appear only as cards. In prose, refer to pieces naturally ("the white tee", "your sneakers").
+- Use a "###" heading only when an answer has two or more distinct sections. Otherwise no headings.
+- Bold sparingly: key piece names and the single takeaway, not whole sentences. No tables, no JSON, no code fences, no raw HTML.
+- When you show outfit cards, your text is 1 or 2 sentences of framing only. The cards carry the detail.
+
+GOOD REPLIES (these show the SHAPE only; the pieces named are made up, never treat them as facts about this user's closet):
+User: does my navy blazer work with brown shoes?
+Reply: **Yes, it's a classic pairing.** Go for a darker, richer brown so it reads intentional, and match your belt.
+
+User: what's missing from my closet?
+Reply: You're solid on tops, but thin on the basics that tie looks together:
+
+- **Neutral trousers:** you only have one bottom that isn't denim
+- **Layering piece:** nothing between a tee and your heavy jacket
+- **Second pair of shoes:** every look ends in the same sneakers
+
+Want me to start with the trousers?
+
 - Never write item ids, look lines, JSON, or marker text in your reply. The app renders cards only from show_outfits.
+- Never use em dashes. Use a comma, period, or parentheses instead.
 - When showing looks, write the reply first, then call show_outfits with:
   looks: [{ items: ["real_id", "real_id"], label: "Short label", reason: "One grounded sentence." }]
-- Before show_outfits, make sure you have seen the exact item ids in a tool result. If you have not, call search_items first. Never stall with "let me check" — search, then give the result.
+- Before show_outfits, make sure you have seen the exact item ids in a tool result. If you have not, call search_items first. Never stall with "let me check". Search, then give the result.
 - Use only ids returned by wardrobe tools. Never describe a card you did not send in show_outfits. The label and reason must describe only the pieces listed in that look.`;
 
 function makeSeenIdsRecorder(wardrobe: ToolWardrobe, seenIds: Set<string>) {
@@ -612,13 +664,24 @@ function makeSeenIdsRecorder(wardrobe: ToolWardrobe, seenIds: Set<string>) {
   };
 }
 
-/** Keep raw item ids out of anything the chat displays. */
-function redactItemIds(value: string): string {
+/** Internal role labels the model sometimes leaks, e.g. "Black t-shirt (base_top)". Never user-facing. */
+export function stripInternalTokens(text: string): string {
+  return text
+    .replace(/[ \t]*\([^()]*\b(?:base_top|one_piece|mid_layer|outer_layer)\b[^()]*\)/gi, "")
+    .replace(/[ \t]*\((?:bottom|footwear|jewelry|eyewear|hat|belt|bag|scarf|socks)\)/gi, "")
+    // a label still being streamed, e.g. "(base_to"
+    .replace(/[ \t]*\([a-z ]*[a-z]+_[a-z_,\s]*$/i, "");
+}
+
+/** Keep raw item ids and em dashes out of anything the chat displays. */
+export function sanitizeChatText(value: string): string {
   return value
+    .replace(/Outfits proposed:[^\n]*/gi, "")
     .replace(/\bscan-[A-Za-z0-9-]+/gi, "")
+    .replace(/[ \t]*—[ \t]*/g, ", ")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\(\s*\)/g, "")
-    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
     .trim();
 }
 
@@ -628,13 +691,51 @@ function normalizeOutfits(raw: unknown, seenIds: Set<string>): RawStyleOutfit[] 
     .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
     .map((entry) => ({
       items: reviveItems(entry.items),
-      label: redactItemIds(typeof entry.label === "string" ? entry.label.slice(0, 60) : "Styled look") || "Styled look",
-      reason: redactItemIds(typeof entry.reason === "string" ? entry.reason.slice(0, 400) : ""),
+      label: sanitizeChatText(typeof entry.label === "string" ? entry.label.slice(0, 60) : "Styled look") || "Styled look",
+      reason: sanitizeChatText(typeof entry.reason === "string" ? entry.reason.slice(0, 400) : ""),
+      vibes: cleanVibes(entry.vibes),
     }))
     .filter((entry) => entry.items.length > 0 && entry.items.every((id) => seenIds.has(id)));
 }
 
-function buildChatUserMessage(context: ToolContext & { userRequest?: string; digest?: string }): string {
+/** Anything that signals a real styling or wardrobe request. */
+const STYLING_INTENT = /\b(wear|wearing|outfits?|styl(?:e|ing)|looks?|dress(?:ed)?|shirts?|tees?|tops?|pants|jeans|trousers|shorts|skirts?|shoes?|sneakers?|boots?|loafers?|jackets?|coats?|hoodies?|sweaters?|layers?|layering|closet|wardrobe|clothes|clothing|fits?|match|pair|goes with|colou?rs?|black|white|blue|red|green|brown|gr[ea]y|beige|navy|cream|pink|yellow|dinner|date|party|wedding|work|office|meeting|interview|gym|trip|travel|pack|weather|rain|cold|hot|summer|winter|tonight|tomorrow|today|weekend|brunch|club|casual|formal|smart|something|suggest|recommend|ideas?|help me|buy|missing|need|have|own|got)\b/i;
+
+/** First line the user actually typed, without the private context the app appends. */
+function typedRequest(userRequest?: string): string {
+  return (userRequest ?? "").split("\n")[0].trim();
+}
+
+const GREETING_OR_THANKS = /^(?:y+o+|hi+|hy+|hey+|hello+|hola|sup|wassup|what'?s up|whats up|howdy|namaste|good (?:morning|afternoon|evening|night)|how are you|thanks?(?: you)?|thx|ty|cool|nice|great|awesome|lol|haha+|bye)\b/i;
+
+/**
+ * Greetings and banter get a plain human reply: no wardrobe work, no outfits.
+ * In a fresh chat any short message without styling intent counts ("yo", "hy",
+ * "hey preyanshu"). Once a conversation is under way, "yes", "sure" or "go
+ * ahead" are answers to the stylist, so only clear greetings and thanks count.
+ */
+export function isSmallTalk(userRequest?: string, hasHistory = false): boolean {
+  if (/explicitly wants/i.test(userRequest ?? "")) return false;
+  const typed = typedRequest(userRequest);
+  if (!typed || STYLING_INTENT.test(typed)) return false;
+  if (typed.split(/\s+/).filter(Boolean).length > 6) return false;
+  return hasHistory ? GREETING_OR_THANKS.test(typed) : true;
+}
+
+const DECLINE = /^(?:no+|nah+|naah+|nope|not really|no thanks|no thank you|nvm|never ?mind|pass|skip|don'?t like (?:it|that))\b[\s!.,]*$/i;
+
+/** A short "no" to the stylist's last suggestion (only meaningful mid-conversation). */
+export function isDecline(userRequest?: string, hasHistory = false): boolean {
+  return hasHistory && DECLINE.test(typedRequest(userRequest));
+}
+
+function buildChatUserMessage(context: ToolContext & { userRequest?: string; digest?: string; smallTalk?: boolean; declined?: boolean }): string {
+  if (context.smallTalk) {
+    return [
+      `<user_request>${typedRequest(context.userRequest)}</user_request>`,
+      "This is casual conversation, not a styling request. Reply warmly in one or two short sentences, like a friend would. Do not call any tools, do not show or offer outfits, and do not say you are building anything. A light open question at the end is fine.",
+    ].join("\n");
+  }
   const parts = [
     `<context>`,
     `occasion_hint: ${context.occasion ?? "unknown"}`,
@@ -648,6 +749,7 @@ function buildChatUserMessage(context: ToolContext & { userRequest?: string; dig
   if (context.weather) parts.push(`<weather>${describeWeather(context.weather)}</weather>`);
   if (context.digest) parts.push(`<wardrobe_digest>\n${context.digest}\n</wardrobe_digest>`);
   if (context.userRequest) parts.push(`<user_request>${context.userRequest}</user_request>`);
+  if (context.declined) parts.push("The user just declined your last suggestion. Acknowledge that in a few words, do NOT repeat or rephrase the suggestion or question you just made, and either offer ONE clearly different direction or ask what they would prefer.");
   parts.push("Answer the user. Use tools for anything that depends on their actual wardrobe. If you show outfits, write the reply first, then call show_outfits with structured looks. Never put item ids or look lines inside the reply text.");
   return parts.join("\n");
 }
@@ -656,7 +758,9 @@ export type AgentProgressEvent =
   | { type: "thinking" }
   | { type: "tool_call"; name: string; label: string; detail?: string }
   | { type: "tool_result"; name: string; summary: string }
-  | { type: "text_delta"; text: string };
+  | { type: "text_delta"; text: string }
+  /** The text of the turn that just ended was thrown away (the model is being nudged to retry). */
+  | { type: "discard_text" };
 
 export type StylistChatResult = {
   reply: string;
@@ -665,6 +769,8 @@ export type StylistChatResult = {
 };
 
 const OUTFIT_MARKER = "<<<OUTFITS>>>";
+/** Pseudo-tool text some models imitate from history. Never user-facing. */
+const LEAK_MARKERS = [OUTFIT_MARKER, "Outfits proposed:", "Cards already shown", "[Private context", "<avoid_looks>"];
 
 /**
  * Streams only the user-facing reply text. Handles the marker protocol
@@ -682,7 +788,11 @@ function createReplyStream(onText: (text: string) => void) {
 
   const pushProse = (text: string) => {
     pending += text;
-    const marker = pending.indexOf(OUTFIT_MARKER);
+    let marker = -1;
+    for (const m of LEAK_MARKERS) {
+      const at = pending.indexOf(m);
+      if (at >= 0 && (marker < 0 || at < marker)) marker = at;
+    }
     if (marker >= 0) {
       const visible = pending.slice(0, marker);
       pending = "";
@@ -690,12 +800,14 @@ function createReplyStream(onText: (text: string) => void) {
       emit(visible);
       return;
     }
-    // Emit immediately; only hold back a suffix that could be the start of the
+    // Emit immediately; only hold back a suffix that could be the start of a
     // marker so a split marker never leaks into the bubble.
     let keep = 0;
-    const max = Math.min(OUTFIT_MARKER.length - 1, pending.length);
-    for (let size = max; size > 0; size -= 1) {
-      if (pending.endsWith(OUTFIT_MARKER.slice(0, size))) { keep = size; break; }
+    for (const m of LEAK_MARKERS) {
+      const max = Math.min(m.length - 1, pending.length);
+      for (let size = max; size > keep; size -= 1) {
+        if (pending.endsWith(m.slice(0, size))) { keep = size; break; }
+      }
     }
     const emitLength = pending.length - keep;
     if (emitLength > 0) {
@@ -851,13 +963,22 @@ function extractShowOutfits(args: Record<string, unknown>): unknown[] {
 export async function runChatAgent(
   context: ToolContext & { userRequest?: string; includeDigest?: boolean },
   wardrobe: ToolWardrobe,
-  options: { system?: string; history?: Array<{ role: string; content: string }>; temperature?: number; maxTurns?: number; onEvent?: (event: AgentProgressEvent) => void } = {},
+  options: {
+    system?: string;
+    history?: Array<{ role: string; content: string }>;
+    temperature?: number;
+    maxTurns?: number;
+    onEvent?: (event: AgentProgressEvent) => void;
+    /** One verdict per look: `null` if it can become a card, otherwise why not. */
+    validateLooks?: (looks: RawStyleOutfit[]) => Array<string | null>;
+  } = {},
 ): Promise<StylistChatResult> {
   const system = options.system ?? CHAT_SYSTEM;
-  const digest = context.includeDigest !== false ? buildOverview(wardrobe) : undefined;
+  const smallTalk = isSmallTalk(context.userRequest, (options.history?.length ?? 0) > 0);
+  const digest = !smallTalk && context.includeDigest !== false ? buildOverview(wardrobe) : undefined;
   const seed: Array<Record<string, unknown>> = [
     ...(options.history ?? []).map((entry) => ({ role: entry.role, content: entry.content })),
-    { role: "user", content: buildChatUserMessage({ ...context, digest }) },
+    { role: "user", content: buildChatUserMessage({ ...context, digest, smallTalk, declined: isDecline(context.userRequest, (options.history?.length ?? 0) > 0) }) },
   ];
   const messages: Array<Record<string, unknown>> = [{ role: "system", content: system }, ...seed];
   const seenIds = new Set<string>();
@@ -867,14 +988,21 @@ export async function runChatAgent(
     if (typeof entry.content === "string") recordOutput(entry.content);
   }
   const maxTurns = options.maxTurns ?? MAX_AGENT_TURNS;
-  const request = (context.userRequest ?? "").trim();
-  const wantsOutfits = /\b(outfits?|what (?:should|to) (?:i )?wear|style me|put together|dress me|outfit ideas?|looks? (?:for|to wear))\b/i.test(request)
-    || (request.split(/\s+/).filter(Boolean).length <= 4 && (context.occasion ?? "everyday") !== "everyday");
+  // Judge intent from what the user typed, never from the private notes the app
+  // appends (they mention "outfits" and would trigger a false match).
+  const request = typedRequest(context.userRequest);
+  const explicitRetry = /explicitly wants/i.test(context.userRequest ?? "");
+  // "swap the shoes", "what if I layer it": after cards were shown, an edit to
+  // them should come back as a card, not a paragraph.
+  const hadCards = /Cards already shown to the user/i.test(context.userRequest ?? "");
+  const adjustsCards = hadCards && /\b(swap|replace|change|switch|instead|what if|make (?:it|them)|more|less|without|add|remove|layer|try|different|another|else|redo|tweak|adjust|swap out)\b/i.test(request);
+  const wantsOutfits = !smallTalk && (explicitRetry || adjustsCards || /\b(outfits?|what (?:should|to) (?:i )?wear|style me|put together|dress me|outfit ideas?|looks? (?:for|to wear))\b/i.test(request)
+    || (request.split(/\s+/).filter(Boolean).length <= 4 && (context.occasion ?? "everyday") !== "everyday"));
   let nudged = false;
   let lastReply = "";
 
   const onEvent = options.onEvent;
-  const pause = () => (onEvent ? new Promise<void>((resolve) => { setTimeout(resolve, 240); }) : Promise.resolve());
+  const pause = () => (onEvent ? new Promise<void>((resolve) => { setTimeout(resolve, 140); }) : Promise.resolve());
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     onEvent?.({ type: "thinking" });
@@ -894,6 +1022,19 @@ export async function runChatAgent(
       }
     } else {
       result = await runStyleTurn(messages, CHAT_TOOLS, AGENT_MAX_TOKENS, options.temperature ?? 0.8);
+    }
+
+    // Banter never needs tools or cards. If the model reaches for them anyway,
+    // keep whatever it said and stop, or ask once for a plain reply.
+    if (smallTalk && result.tool_calls && result.tool_calls.length > 0) {
+      const said = (result.text ?? "").trim();
+      if (said) return { reply: sanitizeChatText(said), outfits: [], turnsUsed: turn + 1 };
+      if (!nudged) {
+        nudged = true;
+        onEvent?.({ type: "discard_text" });
+        messages.push({ role: "user", content: "Just reply in one or two friendly sentences. No tools and no outfits." });
+        continue;
+      }
     }
 
     if (result.tool_calls && result.tool_calls.length > 0) {
@@ -919,23 +1060,35 @@ export async function runChatAgent(
       if (renderCalls.length === 0) continue;
 
       const rendered: RawStyleOutfit[] = [];
+      const rejections: string[] = [];
       for (const call of renderCalls) {
-        const looks = normalizeOutfits(extractShowOutfits(call.arguments), allIds);
+        const rawLooks = extractShowOutfits(call.arguments);
+        const looks = normalizeOutfits(rawLooks, allIds);
+        if (looks.length < rawLooks.length) rejections.push(`${rawLooks.length - looks.length} look(s) used item ids that do not exist. Use only ids returned by search_items or get_items`);
+        const verdicts = options.validateLooks ? options.validateLooks(looks) : looks.map(() => null);
+        const accepted: RawStyleOutfit[] = [];
+        looks.forEach((look, i) => {
+          if (verdicts[i]) rejections.push(`Look "${look.label}" was rejected: ${verdicts[i]}`);
+          else accepted.push(look);
+        });
         onEvent?.({ type: "tool_call", name: "show_outfits", label: "Laying out looks" });
         await pause();
-        const summary = looks.length > 0 ? `${looks.length} ${looks.length === 1 ? "look" : "looks"}` : "No cards rendered";
-        messages.push({ role: "tool", tool_call_id: call.id, content: summary });
+        const summary = accepted.length > 0 ? `${accepted.length} ${accepted.length === 1 ? "look" : "looks"}` : "No cards rendered";
+        const detail = rejections.length > 0
+          ? `${accepted.length > 0 ? `${accepted.length} look(s) rendered. ` : "No cards rendered. "}${rejections.join(". ")}.${accepted.length === 0 ? " Fix this and call show_outfits again." : ""}`
+          : summary;
+        messages.push({ role: "tool", tool_call_id: call.id, content: detail });
         onEvent?.({ type: "tool_result", name: "show_outfits", summary });
-        rendered.push(...looks);
+        rendered.push(...accepted);
       }
 
       if (rendered.length > 0) {
-        return { reply: turnText || lastReply, outfits: rendered, turnsUsed: turn + 1 };
+        return { reply: sanitizeChatText(turnText || lastReply), outfits: rendered, turnsUsed: turn + 1 };
       }
 
       if (!nudged) {
         nudged = true;
-        messages.push({ role: "user", content: "show_outfits received missing or invalid item ids, so no cards were rendered. Call search_items for the exact ids, then write a short fresh reply and call show_outfits again with real ids from the results. Do not say you are still checking — give the final answer." });
+        messages.push({ role: "user", content: `No cards were rendered. ${rejections.length ? `${rejections.join(". ")}. ` : "show_outfits received missing or invalid item ids. "}Call search_items if you need exact ids, then call show_outfits again with complete, valid looks. Do not write the outfits out as text and do not say you are still checking. Give the final answer.` });
       }
       continue;
     }
@@ -948,7 +1101,7 @@ export async function runChatAgent(
         messages.push({ role: "user", content: "Reply to the user now in plain text. If you are showing looks, write the reply first, then call show_outfits with structured looks." });
         continue;
       }
-      throw new WardrobeApiError("The assistant returned no reply — try again.");
+      throw new WardrobeApiError("Alta didn't come back with an answer. Try again.");
     }
 
     const payload = parseChatPayload(text);
@@ -957,6 +1110,7 @@ export async function runChatAgent(
 
     if (rawOutfits.length === 0 && wantsOutfits && !nudged) {
       nudged = true;
+      onEvent?.({ type: "discard_text" });
       messages.push({ role: "assistant", content: text });
       messages.push({ role: "user", content: "You did not render any outfit cards. Call search_items for exact ids if needed, then call show_outfits with structured looks using only real ids. Keep the reply text short." });
       continue;
@@ -966,19 +1120,20 @@ export async function runChatAgent(
       const outfits = normalizeOutfits(rawOutfits, seenIds);
       if (outfits.length === 0 && !nudged) {
         nudged = true;
+        onEvent?.({ type: "discard_text" });
         messages.push({ role: "assistant", content: text });
         messages.push({ role: "user", content: "Those outfit item ids were not returned by any tool. Call search_items now to fetch the exact ids, then call show_outfits with real ids from the results. Keep the same look if it still works." });
         continue;
       }
-      if (outfits.length === 0 && !reply) throw new WardrobeApiError("The assistant returned an empty reply — try again.");
-      return { reply, outfits, turnsUsed: turn + 1 };
+      if (outfits.length === 0 && !reply) throw new WardrobeApiError("Alta didn't come back with an answer. Try again.");
+      return { reply: sanitizeChatText(reply), outfits, turnsUsed: turn + 1 };
     }
 
-    if (!reply) throw new WardrobeApiError("The assistant returned an empty reply — try again.");
-    return { reply, outfits: [], turnsUsed: turn + 1 };
+    if (!reply) throw new WardrobeApiError("Alta didn't come back with an answer. Try again.");
+    return { reply: sanitizeChatText(reply), outfits: [], turnsUsed: turn + 1 };
   }
 
-  throw new WardrobeApiError("Assistant session exceeded the turn limit — try again.");
+  throw new WardrobeApiError("That took too long to work out. Try again.", "server", "Assistant session exceeded the turn limit");
 }
 
 function buildUserMessage(context: ToolContext & { count?: number; userRequest?: string; digest?: string }): string {
@@ -993,7 +1148,11 @@ function buildUserMessage(context: ToolContext & { count?: number; userRequest?:
     ...(context.presentation && context.presentation !== "unspecified"
       ? [`wearer_presentation: ${context.presentation} (style the looks to suit this wearer)`]
       : []),
-    `outfits: 3 to 5 of your best — fewer if you cannot make that many truly good ones`,
+    context.count && context.count > 5
+      ? `outfits: up to ${context.count} of your best. Make them deliberately varied: spread them across different vibes (${allowedVibeIds(context.presentation).join(", ")}), silhouettes and formality, so each vibe has something. Fewer if you cannot make that many truly good ones`
+      : `outfits: ${context.count ? `up to ${context.count}` : "3 to 5"} of your best — fewer if you cannot make that many truly good ones`,
+    `vibes_allowed: ${allowedVibeIds(context.presentation).join(", ")}`,
+    ...(context.styleTags?.length ? [`vibe_focus: every look must clearly read as ${context.styleTags.join(" or ")}`] : []),
     `</context>`,
   ];
   if (context.weather) parts.push(`<weather>${describeWeather(context.weather)}</weather>`);
@@ -1077,6 +1236,7 @@ async function runAgentLoop(
           items: (outfit.items ?? []).map(String),
           label: typeof outfit.label === "string" ? outfit.label.slice(0, 60) : "Styled look",
           reason: typeof outfit.reason === "string" ? outfit.reason.slice(0, 400) : "",
+          vibes: cleanVibes(outfit.vibes),
         }));
 
       if (outfits.length > 0) {
@@ -1117,10 +1277,10 @@ async function runAgentLoop(
       continue;
     }
 
-    throw new WardrobeApiError("Stylist returned unparseable output — try again.");
+    throw new WardrobeApiError("Alta sent back something unexpected. Try again.", "bad_response", "Stylist returned unparseable output");
   }
 
-  throw new WardrobeApiError("Stylist session exceeded the turn limit — try again.");
+  throw new WardrobeApiError("That took too long to work out. Try again.", "server", "Stylist session exceeded the turn limit");
 }
 
 export const REVIEWER_SYSTEM = `${STYLIST_SYSTEM}

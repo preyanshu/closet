@@ -1,12 +1,15 @@
 import { type Item, type Outfit } from "@/data/mock";
 import { WardrobeApiError } from "@/services/api/wardrobe-api";
-import { runStylistAgent, runChatAgent, critiqueOutfits, type AgentProgressEvent, type RawStyleOutfit, type StylistWardrobe } from "@/services/stylist-agent";
+import { runStylistAgent, runChatAgent, critiqueOutfits, sanitizeChatText, type AgentProgressEvent, type RawStyleOutfit, type StylistWardrobe } from "@/services/stylist-agent";
 import { judgeOccasionFit } from "@/services/decision";
+import { assignRoles, canWorkAsLayer } from "@/services/item-roles";
+import { cleanVibes } from "@/services/item-options";
+import { allowedVibeIds } from "@/services/vibes";
 import type { WeatherSummary } from "@/services/weather";
 import { DEFAULT_WEARER_PRESENTATION, type ItemRole, type OutfitItemRef, type WearerPresentation } from "@/types/domain";
 
 /** Upper bound on looks per batch. We never pad — fewer is fine. */
-const MAX_OUTFITS = 5;
+const MAX_OUTFITS = 6;
 
 /**
  * Rules-first outfit composition engine (PR4).
@@ -31,6 +34,8 @@ export type OutfitContext = {
   /** Additional pieces that must appear in every composed outfit (multi-anchor). */
   includeItemIds?: string[];
   count?: number;
+  /** Who the looks are styled for; keeps vibes that don't suit them out of the labels. */
+  presentation?: WearerPresentation;
 };
 
 type OutfitPersonality = "familiar" | "fresh" | "dressy" | "comfort" | "underused";
@@ -425,7 +430,7 @@ function describeOutfit(items: Item[], context: OutfitContext, personality: Outf
 
   switch (personality) {
     case "familiar":
-      return `A reliable ${occasion} pick — the ${heroName} does the heavy lifting.`;
+      return `A reliable ${occasion} pick. The ${heroName} does the heavy lifting.`;
     case "dressy":
       return `A sharper ${occasion} option, led by the ${heroName}.`;
     case "comfort":
@@ -500,7 +505,6 @@ export function composeOutfits(context: OutfitContext, items: Item[]): Outfit[] 
   const chosen = diversify(candidates, count, context);
   if (chosen.length === 0) return [];
   fillWithAlternates(chosen, pool, context, count);
-  while (chosen.length < count) chosen.push({ ...chosen[0] });
 
   const personalities = personalityLabels(chosen);
   return chosen.map((candidate, index) => toOutfit(candidate.items, context, personalities[index], index));
@@ -523,10 +527,115 @@ export function generateOutfitsForToday(aestheticId: string, sourceItems: Item[]
 // and we validate/repair with the deterministic rules before presenting.
 // ---------------------------------------------------------------------------
 
-function aiToOutfit(items: Item[], style: RawStyleOutfit, context: OutfitContext, index: number): Outfit {
+export { canWorkAsLayer };
+
+/** Alternative words people (and models) use for a subcategory. */
+const SUBCATEGORY_WORDS: Record<string, string[]> = {
+  "t-shirt": ["tee", "t-shirt", "tshirt"],
+  "tank top": ["tank"],
+  tank: ["tank"],
+  shirt: ["button-up", "button up", "button-down", "button down", "shirt"],
+  sweater: ["sweater", "jumper"],
+  knit: ["knit"],
+  hoodie: ["hoodie"],
+  cardigan: ["cardigan"],
+  blazer: ["blazer"],
+  jacket: ["jacket"],
+  trousers: ["trousers", "pants"],
+  jeans: ["jeans", "denim"],
+  chinos: ["chinos"],
+  sneaker: ["sneakers"],
+  loafer: ["loafers"],
+  boot: ["boots"],
+};
+
+/** Phrases a model would use to refer to this exact piece in a sentence. */
+function phrasesFor(item: Item): string[] {
+  const name = item.name.toLowerCase();
+  const sub = (item.subcategory ?? "").toLowerCase();
+  const color = item.primaryColor.toLowerCase();
+  const phrases = new Set<string>([name]);
+  const words = name.split(/\s+/);
+  if (words.length >= 3) phrases.add(words.slice(0, -1).join(" "));
+  if (sub) {
+    phrases.add(`${color} ${sub}`);
+    for (const word of SUBCATEGORY_WORDS[sub] ?? []) phrases.add(`${color} ${word}`);
+  }
+  return [...phrases].filter((phrase) => phrase.length >= 6);
+}
+
+/** Pieces the text talks about that are NOT in the look (the model describing a look it did not build). */
+export function mentionedButMissing(text: string, present: Item[], wardrobe: Item[]): Item[] {
+  const lower = text.toLowerCase();
+  if (!lower.trim()) return [];
+  const presentIds = new Set(present.map((item) => item.id));
+  // Anything the look does contain can legitimately be named, so a phrase that
+  // also describes a present piece ("white tee" vs a present white t-shirt) never counts.
+  const presentPhrases = new Set(present.flatMap(phrasesFor));
+  return wardrobe.filter((item) => {
+    if (presentIds.has(item.id)) return false;
+    return phrasesFor(item).some((phrase) => !presentPhrases.has(phrase) && lower.includes(phrase));
+  });
+}
+
+const lowerFirst = (name: string) => name.charAt(0).toLowerCase() + name.slice(1);
+
+/** A plain sentence built only from the look's real pieces. */
+export function groundedDescription(pieces: Item[], roleOf: (item: Item) => ItemRole): string {
+  const named = (item?: Item) => (item ? lowerFirst(item.name) : "");
+  const ofRole = (role: ItemRole) => pieces.find((item) => roleOf(item) === role);
+  const base = ofRole("base_top") ?? ofRole("one_piece");
+  const layer = ofRole("mid_layer");
+  const outer = ofRole("outer_layer");
+  const bottom = ofRole("bottom");
+  const shoes = ofRole("footwear");
+  const head = layer && base ? `${layer.name} worn open over the ${named(base)}` : base ? base.name : pieces[0]?.name ?? "This look";
+  const tail = [bottom, outer, shoes].filter((item): item is Item => Boolean(item)).map(named);
+  const list = tail.length <= 1 ? tail.join("") : `${tail.slice(0, -1).join(", ")} and ${tail[tail.length - 1]}`;
+  const join = layer && base ? ", with " : " with ";
+  return list ? `${head}${join}${list}.` : `${head}.`;
+}
+
+function groundedLabel(pieces: Item[], roleOf: (item: Item) => ItemRole): string {
+  const top = pieces.find((item) => roleOf(item) === "base_top" || roleOf(item) === "one_piece");
+  const bottom = pieces.find((item) => roleOf(item) === "bottom");
+  return top && bottom ? `${top.name} with ${lowerFirst(bottom.name)}` : top?.name ?? "Styled look";
+}
+
+/** Why a look can't be turned into a card, in words the stylist can act on. `null` = fine. */
+export function diagnoseLook(raw: RawStyleOutfit, pool: Item[]): string | null {
+  const byId = new Map(pool.map((item) => [item.id, item]));
+  const items = raw.items.map((id) => byId.get(id)).filter((item): item is Item => Boolean(item));
+  if (items.length === 0) return "none of its pieces are available";
+  const { kept, roleOf } = assignRoles(items);
+  const roles = new Set(kept.map((item) => roleOf.get(item.id)));
+  if (roles.has("one_piece")) return null;
+  if (!roles.has("base_top")) return "it has no base top. Every look needs a base top and a bottom, or a one-piece";
+  if (!roles.has("bottom")) return "it has no bottom (trousers, jeans, chinos, skirt or shorts). Every look needs a base top and a bottom, or a one-piece";
+  return null;
+}
+
+/**
+ * The vibes a look reads as: the stylist's own labels first; if it gave none,
+ * the vibes at least half the pieces carry; else the vibe it was asked to focus on.
+ */
+function vibesFor(items: Item[], style: RawStyleOutfit, context: OutfitContext): string[] {
+  const given = cleanVibes(style.vibes, context.presentation);
+  if (given.length > 0) return given;
+  const inferred = allowedVibeIds(context.presentation).filter((vibe) => items.filter((item) => item.styleTags.includes(vibe)).length * 2 >= items.length);
+  if (inferred.length > 0) return inferred.slice(0, 3);
+  const focus = cleanVibes(context.styleTags, context.presentation);
+  return focus.slice(0, 1);
+}
+
+function aiToOutfit(items: Item[], style: RawStyleOutfit, context: OutfitContext, index: number, roleOverrides: Map<string, ItemRole> = new Map()): Outfit {
   const now = new Date().toISOString();
-  const refs: OutfitItemRef[] = items.map((item) => ({ itemId: item.id, role: item.role, layerOrder: ROLE_ORDER[item.role] }));
-  const id = `ai-${index + 1}-${hashKey(`${context.occasion ?? "everyday"}|${items.map((item) => item.id).sort().join(",")}`)}`;
+  const vibes = vibesFor(items, style, context);
+  const refs: OutfitItemRef[] = items.map((item) => {
+    const role = roleOverrides.get(item.id) ?? item.role;
+    return { itemId: item.id, role, layerOrder: ROLE_ORDER[role] };
+  });
+  const id = `ai-${hashKey(`${context.occasion ?? "everyday"}|${items.map((item) => item.id).sort().join(",")}`)}`;
   return {
     id,
     ownerId: "local-demo",
@@ -536,10 +645,12 @@ function aiToOutfit(items: Item[], style: RawStyleOutfit, context: OutfitContext
     itemIds: items.map((item) => item.id),
     items: refs,
     aestheticId: context.styleTags?.[0] ?? "all",
-    tags: outfitTags(items, context),
+    // Vibe labels lead the tags so the Outfits filters (Office, Evening…) find these looks too.
+    tags: [...new Set([...vibes.map(formatTag), ...outfitTags(items, context)])].slice(0, 5),
     metadata: {
       occasion: OCCASION_LABEL[context.occasion ?? "everyday"],
       season: context.season ? context.season : undefined,
+      vibes,
     },
     createdAt: now,
     updatedAt: now,
@@ -555,44 +666,54 @@ export function verifyAndRepairOutfits(raw: RawStyleOutfit[], wardrobe: Item[], 
 
   for (const style of raw) {
     const seenIds = new Set<string>();
-    const seenRoles = new Set<ItemRole>();
-    const pieces = style.items
+    const unique = style.items
       .map((id) => byId.get(id))
       .filter((item): item is Item => Boolean(item))
       .filter((item) => {
         if (seenIds.has(item.id)) return false;
         seenIds.add(item.id);
         return true;
-      })
-      // One item per slot: drop duplicate roles (e.g. two pairs of shoes) and
-      // keep the first the stylist chose.
-      .filter((item) => {
-        if (seenRoles.has(item.role)) return false;
-        seenRoles.add(item.role);
-        return true;
       });
 
-    const onePiece = pieces.find((item) => item.role === "one_piece");
+    // One piece per slot, resolved with each piece's alternate roles: a tee keeps
+    // the base slot and a shirt/knit that can layer takes the mid-layer slot.
+    const { kept, roleOf } = assignRoles(unique);
+    const roleOverrides = new Map<string, ItemRole>();
+    for (const item of kept) {
+      const role = roleOf.get(item.id)!;
+      if (role !== item.role) roleOverrides.set(item.id, role);
+    }
+    const effectiveRole = (item: Item): ItemRole => roleOf.get(item.id) ?? item.role;
+    const pieces = kept;
+
+    const onePiece = pieces.find((item) => effectiveRole(item) === "one_piece");
     const clean = onePiece
-      ? pieces.filter((item) => item.role !== "base_top" && item.role !== "bottom")
+      ? pieces.filter((item) => effectiveRole(item) !== "base_top" && effectiveRole(item) !== "bottom")
       : pieces;
 
-    const hasCore = clean.some((item) => item.role === "one_piece")
-      || (clean.some((item) => item.role === "base_top") && clean.some((item) => item.role === "bottom"));
+    const hasCore = clean.some((item) => effectiveRole(item) === "one_piece")
+      || (clean.some((item) => effectiveRole(item) === "base_top") && clean.some((item) => effectiveRole(item) === "bottom"));
     if (!hasCore || clean.length === 0) continue;
 
-    if (!clean.some((item) => item.role === "footwear")) {
+    if (!clean.some((item) => effectiveRole(item) === "footwear")) {
       const shoe = pickBest(byRole(wardrobe, "footwear"), context);
       if (shoe && !clean.some((item) => item.id === shoe.id)) clean.push(shoe);
     }
 
-    clean.sort((a, b) => ROLE_ORDER[a.role] - ROLE_ORDER[b.role] || a.id.localeCompare(b.id));
+    clean.sort((a, b) => ROLE_ORDER[effectiveRole(a)] - ROLE_ORDER[effectiveRole(b)] || a.id.localeCompare(b.id));
     const finalPieces = clean.slice(0, 6);
     const signature = finalPieces.map((item) => item.id).join(",");
     if (seen.has(signature)) continue;
     seen.add(signature);
 
-    result.push(aiToOutfit(finalPieces, style, context, result.length));
+    // The card shows these pieces, so its text may only talk about them. If the
+    // model described a piece it did not include, replace the text rather than
+    // show a card that contradicts itself.
+    const grounded = { ...style };
+    if (mentionedButMissing(style.reason ?? "", finalPieces, wardrobe).length > 0) grounded.reason = groundedDescription(finalPieces, effectiveRole);
+    if (mentionedButMissing(style.label ?? "", finalPieces, wardrobe).length > 0) grounded.label = groundedLabel(finalPieces, effectiveRole);
+
+    result.push(aiToOutfit(finalPieces, grounded, context, result.length, roleOverrides));
     if (result.length >= max) break;
   }
 
@@ -731,6 +852,7 @@ export async function composeOutfitsAI(
       styleTags: context.styleTags,
       weather: options.weather,
       presentation,
+      count: context.count,
       userRequest: options.userRequest,
     },
     wardrobe,
@@ -738,8 +860,8 @@ export async function composeOutfitsAI(
   );
 
   const refined = await refineOutfits(context, result.outfits, result.reply, wardrobe, pool, season, options);
-  const verified = verifyAndRepairOutfits(refined.source, pool, { ...context, season, count: MAX_OUTFITS });
-  if (verified.length === 0) throw new WardrobeApiError("The stylist returned no valid combos — try again.");
+  const verified = verifyAndRepairOutfits(refined.source, pool, { ...context, season, presentation, count: MAX_OUTFITS });
+  if (verified.length === 0) throw new WardrobeApiError("Alta couldn't put together a look from your pieces this time. Try again.");
 
   // Quality over quantity: never substitute rules-engine looks. If the stylist
   // produced a single great outfit, we show a single great outfit.
@@ -812,16 +934,23 @@ export async function chatWithAlta(
       userRequest: options.userRequest,
     },
     wardrobe,
-    { system: options.system, history: options.history, temperature: options.temperature, onEvent: options.onEvent },
+    { system: options.system, history: options.history, temperature: options.temperature, onEvent: options.onEvent, validateLooks: (looks) => looks.map((look) => diagnoseLook(look, pool)) },
   );
 
-  if (result.outfits.length === 0) return { reply: result.reply, outfits: [], turnsUsed: result.turnsUsed };
+  if (result.outfits.length === 0) return { reply: sanitizeChatText(result.reply), outfits: [], turnsUsed: result.turnsUsed };
 
-  const refined = await refineOutfits(context, result.outfits, result.reply, wardrobe, pool, season, options);
-  const verified = verifyAndRepairOutfits(refined.source, pool, { ...context, season, count: MAX_OUTFITS });
+  // The chat already streamed its reply. A silent review pass would swap the
+  // cards after the user read the text, so chat skips it unless asked for.
+  const refined = await refineOutfits(context, result.outfits, result.reply, wardrobe, pool, season, { ...options, selfCritique: options.selfCritique ?? false });
+  const verified = verifyAndRepairOutfits(refined.source, pool, { ...context, season, presentation, count: MAX_OUTFITS });
+  const outfits = verified.slice(0, MAX_OUTFITS).map((outfit) => ({
+    ...outfit,
+    label: sanitizeChatText(outfit.label) || outfit.label,
+    description: sanitizeChatText(outfit.description),
+  }));
   return {
-    reply: refined.reply ?? result.reply,
-    outfits: verified.slice(0, MAX_OUTFITS),
+    reply: sanitizeChatText(refined.reply ?? result.reply),
+    outfits,
     turnsUsed: result.turnsUsed + refined.turnsUsed,
   };
 }

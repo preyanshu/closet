@@ -1,7 +1,10 @@
-import { adaptiveColors, radius, spacing, CircularGlassButton, ItemImage, WardrobeIcon } from "@/components/ui";
-import { SymbolView } from "expo-symbols";
+import { adaptiveColors, radius, spacing, Button, CircularGlassButton, FilterChip, ItemImage, WardrobeIcon } from "@/components/ui";
+import { ItemEditorSheet } from "@/components/item-editor";
+import { swatchColor } from "@/services/item-options";
+import { effectiveAlternateRoles } from "@/services/item-roles";
 import { router, useLocalSearchParams } from "expo-router";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { useState, type ReactNode } from "react";
 import { useCloset } from "@/state/closet-context";
 import { categoryLabels } from "@/data/mock";
 import { formatPrice, priceToNumber, type AvailabilityStatus } from "@/types/domain";
@@ -9,14 +12,31 @@ import { availabilityLabels, AVAILABILITY_STATUSES, lifecycleLabels, processingL
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 
-type SymbolName = React.ComponentProps<typeof SymbolView>["name"];
-type DetailRow = { icon: SymbolName; label: string; value: string };
+const SHORT_AVAILABILITY: Record<AvailabilityStatus, string> = { available: "Available", laundry: "Laundry", packed: "Packed", unavailable: "Away" };
+const cardStyle = {
+  borderRadius: 20,
+  borderCurve: "continuous" as const,
+  overflow: "hidden" as const,
+  backgroundColor: adaptiveColors.surface,
+  borderWidth: 1,
+  borderColor: adaptiveColors.border,
+};
+
+const titleCase = (value: string) => value.replace(/-/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+
+function formatDay(value?: string | null): string {
+  if (!value) return "Never";
+  const date = new Date(`${value.slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+}
 
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { items, isFavorite, toggleFavorite, updateItem, removeItem } = useCloset();
   const insets = useSafeAreaInsets();
   const item = items.find((i) => i.id === id);
+  const [editing, setEditing] = useState(false);
 
   if (!item) {
     return (
@@ -28,142 +48,167 @@ export default function ItemDetailScreen() {
 
   const fav = isFavorite(item.id);
   const price = priceToNumber(item);
+  const costPerWear = price != null && item.wearCount > 0 ? `$${(price / item.wearCount).toFixed(2)}` : "—";
+  const unavailable = item.availabilityStatus !== "available";
 
-  const detailRows: DetailRow[] = [
-    { icon: "dollarsign.circle", label: "Price", value: formatPrice(item) },
-    { icon: "tag", label: "Category", value: item.subcategory ? `${categoryLabels[item.category]} · ${item.subcategory}` : categoryLabels[item.category] },
-    { icon: "paintpalette", label: "Color", value: item.secondaryColors.length > 0 ? `${item.primaryColor}, ${item.secondaryColors.join(", ")}` : item.primaryColor },
-  ];
-  if (item.brand) detailRows.push({ icon: "bag", label: "Brand", value: item.brand });
+  const confirmRemove = () => {
+    Alert.alert("Remove this piece?", `${item.name} will be removed from your closet and from any look that only uses it. This can't be undone.`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          removeItem(item.id);
+          router.back();
+        },
+      },
+    ]);
+  };
 
-  const fabricRows = ([
-    { icon: "square.stack.3d.up", label: "Role", value: roleLabels[item.role] },
-    item.fit ? { icon: "ruler", label: "Fit", value: item.fit } : null,
-    item.sleeveLength ? { icon: "tshirt", label: "Sleeve", value: item.sleeveLength } : null,
-    item.pattern ? { icon: "square.grid.3x3", label: "Pattern", value: item.pattern } : null,
-    item.visibleTexture ? { icon: "paintbrush", label: "Texture", value: item.visibleTexture } : null,
-    item.warmthBand ? { icon: "thermometer.medium", label: "Warmth", value: warmthLabels[item.warmthBand] } : null,
-    item.formality ? { icon: "sparkles", label: "Formality", value: item.formality } : null,
-  ] as Array<DetailRow | null>).filter((row): row is DetailRow => row !== null);
+  type Cell = { label: string; value: string; colors?: string[] };
+  const cells = ([
+    { label: "Color", value: titleCase(item.primaryColor), colors: [item.primaryColor, ...item.secondaryColors] },
+    { label: "Works as", value: [...new Set([item.role, ...effectiveAlternateRoles(item)])].map((role) => roleLabels[role]).join(" + ") },
+    item.fit ? { label: "Fit", value: titleCase(item.fit) } : null,
+    item.sleeveLength ? { label: "Sleeve", value: titleCase(item.sleeveLength) } : null,
+    item.pattern ? { label: "Pattern", value: titleCase(item.pattern) } : null,
+    item.visibleTexture ? { label: "Texture", value: titleCase(item.visibleTexture) } : null,
+    item.warmthBand ? { label: "Warmth", value: warmthLabels[item.warmthBand] } : null,
+    item.formality ? { label: "Formality", value: titleCase(item.formality) } : null,
+    item.brand ? { label: "Brand", value: item.brand } : null,
+  ] as Array<Cell | null>).filter((cell): cell is Cell => cell !== null);
+  // Pairs per row; an odd last cell takes the full width.
+  const rows: Cell[][] = [];
+  for (let index = 0; index < cells.length; index += 2) rows.push(cells.slice(index, index + 2));
+  const subtitle = [categoryLabels[item.category], item.subcategory ? titleCase(item.subcategory) : null, price != null ? formatPrice(item) : null].filter(Boolean).join(" · ");
 
-  const statusRows = ([
-    item.availabilityStatus !== "available" ? { icon: "tray.full", label: "Availability", value: availabilityLabels[item.availabilityStatus] } : null,
-    item.lifecycleStatus !== "owned" ? { icon: "archivebox", label: "Lifecycle", value: lifecycleLabels[item.lifecycleStatus] } : null,
-    item.processingStatus !== "ready" ? { icon: "hourglass", label: "Processing", value: processingLabels[item.processingStatus] } : null,
-  ] as Array<DetailRow | null>).filter((row): row is DetailRow => row !== null);
-
-  const wearRows: DetailRow[] = [
-    { icon: "clock", label: "Worn", value: item.wearCount > 0 ? `${item.wearCount} times` : "Never" },
-    { icon: "chart.line.downtrend.xyaxis", label: "Cost per wear", value: price != null && item.wearCount > 0 ? `$${(price / item.wearCount).toFixed(2)}` : "—" },
-    { icon: "clock", label: "Last worn", value: item.lastWorn ?? "Never" },
-  ];
+  const notes = [
+    item.lifecycleStatus !== "owned" ? `Lifecycle: ${lifecycleLabels[item.lifecycleStatus]}` : null,
+    item.processingStatus !== "ready" ? `Photo: ${processingLabels[item.processingStatus]}` : null,
+  ].filter((note): note is string => note !== null);
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: adaptiveColors.canvas }} contentInsetAdjustmentBehavior="automatic">
-      <View style={{ padding: spacing.lg, paddingBottom: insets.bottom + spacing.xl, gap: spacing.xl }}>
-        <ItemImage imageUrl={item.displayAssetUri} label={item.name} contentFit="contain" style={{ borderRadius: radius.lg, width: "100%", height: 240, aspectRatio: undefined, borderColor: adaptiveColors.border }} />
-
-        <View style={{ gap: 16 }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: spacing.md }}>
-            <View style={{ flex: 1, gap: 4 }}>
-              <Text style={{ fontSize: 24, fontWeight: "600", color: adaptiveColors.label, letterSpacing: -0.6 }}>{item.name}</Text>
-              <Text style={{ fontSize: 14, color: adaptiveColors.secondaryLabel }}>{categoryLabels[item.category]} · {item.wearCount === 0 ? "Not worn yet" : `${item.wearCount} wears`}</Text>
-            </View>
+    <View style={{ flex: 1, backgroundColor: adaptiveColors.canvas }}>
+    <ScrollView style={{ flex: 1 }} contentInsetAdjustmentBehavior="automatic" showsVerticalScrollIndicator={false}>
+      <View style={{ padding: spacing.lg, paddingBottom: spacing.xl, gap: spacing.lg }}>
+        {/* Hero */}
+        <View style={{ borderRadius: 28, borderCurve: "continuous", overflow: "hidden", backgroundColor: adaptiveColors.surfaceMuted, borderWidth: 1, borderColor: adaptiveColors.border }}>
+          <ItemImage
+            imageUrl={item.displayAssetUri}
+            label={item.name}
+            contentFit="contain"
+            style={{ width: "100%", height: 300, aspectRatio: undefined, borderRadius: 0, borderWidth: 0, backgroundColor: "transparent", opacity: unavailable ? 0.6 : 1 }}
+          />
+          <View style={{ position: "absolute", top: 12, right: 12, flexDirection: "row", gap: 8 }}>
+            <CircularGlassButton icon="pencil" label="Edit piece" tintColor={adaptiveColors.label} onPress={() => setEditing(true)} />
             <CircularGlassButton
               icon={fav ? "heart.fill" : "heart"}
               label={fav ? "Remove favorite" : "Add favorite"}
-              tintColor={fav ? adaptiveColors.destructive : adaptiveColors.secondaryLabel}
+              tintColor={fav ? adaptiveColors.destructive : adaptiveColors.label}
               selected={fav}
-              onPress={() => toggleFavorite(item.id)}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                toggleFavorite(item.id);
+              }}
             />
           </View>
+          {unavailable ? (
+            <View style={{ position: "absolute", top: 16, left: 16, paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.65)" }}>
+              <Text style={{ fontSize: 11, fontWeight: "800", color: "#FFF" }}>{availabilityLabels[item.availabilityStatus]}</Text>
+            </View>
+          ) : null}
+        </View>
 
-          {item.styleTags.length > 0 ? <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
-          <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>Vibes</Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
-            {item.styleTags.map((a) => (
-              <View key={a} style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.pill, borderWidth: 1, borderColor: adaptiveColors.border, backgroundColor: adaptiveColors.surface }}>
-                <Text style={{ fontSize: 13, fontWeight: "500", color: adaptiveColors.secondaryLabel, textTransform: "capitalize" }}>{a.replace(/-/g, " ")}</Text>
+        {/* Title */}
+        <View style={{ gap: 6 }}>
+          <Text style={{ fontSize: 28, lineHeight: 34, fontWeight: "800", letterSpacing: -0.8, color: adaptiveColors.label }}>{item.name}</Text>
+          <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{subtitle}</Text>
+          {item.styleTags.length > 0 ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+              {item.styleTags.map((tag) => (
+                <View key={tag} style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.pill, backgroundColor: adaptiveColors.accentSoft }}>
+                  <Text style={{ fontSize: 12, fontWeight: "700", color: adaptiveColors.accent }}>{titleCase(tag)}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </View>
+
+        {/* Stats: one card, three columns */}
+        <View style={{ ...cardStyle, flexDirection: "row", paddingVertical: 14 }}>
+          <Stat label="Wears" value={String(item.wearCount)} />
+          <View style={{ width: 1, backgroundColor: adaptiveColors.separator }} />
+          <Stat label="Per wear" value={costPerWear} />
+          <View style={{ width: 1, backgroundColor: adaptiveColors.separator }} />
+          <Stat label="Last worn" value={item.lastWorn ? formatDay(item.lastWorn) : "—"} />
+        </View>
+
+        {/* Details: an aligned two-column table in one card */}
+        <Section title="Details">
+          <View style={cardStyle}>
+            {rows.map((pair, rowIndex) => (
+              <View key={pair[0].label} style={{ flexDirection: "row", borderTopWidth: rowIndex === 0 ? 0 : 1, borderTopColor: adaptiveColors.separator }}>
+                {pair.map((cell, cellIndex) => (
+                  <View key={cell.label} style={{ flex: 1, gap: 3, paddingVertical: 12, paddingHorizontal: 16, borderLeftWidth: cellIndex === 0 ? 0 : 1, borderLeftColor: adaptiveColors.separator }}>
+                    <Text style={{ fontSize: 12, fontWeight: "500", color: adaptiveColors.tertiaryLabel }}>{cell.label}</Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      {cell.colors?.map((color, index) => (
+                        <View key={`${color}-${index}`} style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: swatchColor(color), borderWidth: 1, borderColor: "rgba(0,0,0,0.15)" }} />
+                      ))}
+                      <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 15, fontWeight: "600", color: adaptiveColors.label }}>{cell.value}</Text>
+                    </View>
+                  </View>
+                ))}
               </View>
             ))}
           </View>
-          </View> : null}
+          {notes.length > 0 ? <Text style={{ fontSize: 12, color: adaptiveColors.tertiaryLabel }}>{notes.join(" · ")}</Text> : null}
+        </Section>
 
-          <DetailSection title="Piece details" rows={detailRows} />
-          <DetailSection title="Fabric & fit" rows={fabricRows} />
-          {statusRows.length > 0 ? <DetailSection title="Status" rows={statusRows} /> : null}
-          <DetailSection title="Wear history" rows={wearRows} />
-
-          <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
-            <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>Availability</Text>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
-              {AVAILABILITY_STATUSES.map((status: AvailabilityStatus) => {
-                const active = item.availabilityStatus === status;
-                return (
-                  <Pressable
-                    key={status}
-                    accessibilityLabel={`Set availability to ${availabilityLabels[status]}`}
-                    onPress={() => {
-                      if (active) return;
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      updateItem({ ...item, availabilityStatus: status, updatedAt: new Date().toISOString() });
-                    }}
-                    style={{
-                      paddingHorizontal: 14,
-                      paddingVertical: 10,
-                      borderRadius: radius.pill,
-                      borderWidth: 1,
-                      borderColor: active ? adaptiveColors.label : adaptiveColors.border,
-                      backgroundColor: active ? adaptiveColors.label : adaptiveColors.surface,
-                    }}
-                  >
-                    <Text style={{ fontSize: 13, fontWeight: "600", color: active ? adaptiveColors.onAccent : adaptiveColors.secondaryLabel }}>
-                      {availabilityLabels[status]}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <Text style={{ fontSize: 11, fontWeight: "500", color: adaptiveColors.tertiaryLabel }}>
-              Unavailable pieces are skipped when Alta styles outfits.
-            </Text>
+        {/* Availability */}
+        <Section title="Availability">
+          <View style={{ flexDirection: "row", gap: 6 }}>
+              {AVAILABILITY_STATUSES.map((status: AvailabilityStatus) => (
+                <FilterChip
+                  key={status}
+                  fill
+                  label={SHORT_AVAILABILITY[status]}
+                  selected={item.availabilityStatus === status}
+                  onPress={() => {
+                    if (item.availabilityStatus === status) return;
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    updateItem({ ...item, availabilityStatus: status, updatedAt: new Date().toISOString() });
+                  }}
+                />
+              ))}
           </View>
+        </Section>
 
-          <Pressable
-            accessibilityLabel="Remove item from closet"
-            onPress={() => {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              removeItem(item.id);
-              router.back();
-            }}
-            style={{ alignItems: "center", paddingVertical: spacing.md, marginTop: spacing.sm }}
-          >
-            <Text style={{ fontSize: 13, fontWeight: "700", color: adaptiveColors.destructive }}>Remove from closet</Text>
-          </Pressable>
-        </View>
       </View>
     </ScrollView>
-  );
-}
-
-function DetailSection({ title, rows }: { title: string; rows: DetailRow[] }) {
-  if (rows.length === 0) return null;
-  return (
-    <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
-      <Text style={{ fontSize: 14, fontWeight: "600", color: adaptiveColors.label }}>{title}</Text>
-      <View style={{ borderRadius: radius.lg, backgroundColor: adaptiveColors.surface, borderWidth: 1, borderColor: adaptiveColors.border, paddingHorizontal: spacing.md }}>
-        {rows.map((row, index) => <InfoRow key={row.label} icon={row.icon} label={row.label} value={row.value} last={index === rows.length - 1} />)}
+    <ItemEditorSheet item={item} visible={editing} onDismiss={() => setEditing(false)} onSave={updateItem} />
+      <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: Math.max(insets.bottom, spacing.lg), backgroundColor: adaptiveColors.canvas, borderTopWidth: 1, borderTopColor: adaptiveColors.separator }}>
+        <Button variant="destructive" icon="trash" accessibilityLabel="Remove item from closet" onPress={confirmRemove}>Remove from closet</Button>
       </View>
     </View>
   );
 }
 
-function InfoRow({ icon, label, value, last = false }: { icon: SymbolName; label: string; value: string; last?: boolean }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", minHeight: 54, paddingVertical: spacing.md, borderBottomWidth: last ? 0 : 1, borderBottomColor: adaptiveColors.separator, gap: spacing.sm }}>
-      <WardrobeIcon name={icon} color={adaptiveColors.tertiaryLabel} size={18} />
-      <Text style={{ flex: 1, fontSize: 15, fontWeight: "500", color: adaptiveColors.secondaryLabel }}>{label}</Text>
-      <Text style={{ flexShrink: 1, maxWidth: "55%", textAlign: "right", fontSize: 15, fontWeight: "500", color: adaptiveColors.label, textTransform: "capitalize", fontVariant: ["tabular-nums"] }}>{value}</Text>
+    <View style={{ gap: spacing.sm }}>
+      <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel, paddingHorizontal: 4 }}>{title}</Text>
+      {children}
+    </View>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={{ flex: 1, alignItems: "center", gap: 2, paddingHorizontal: 8 }}>
+      <Text numberOfLines={1} adjustsFontSizeToFit style={{ fontSize: 20, fontWeight: "700", letterSpacing: -0.3, color: adaptiveColors.label, fontVariant: ["tabular-nums"] }}>{value}</Text>
+      <Text style={{ fontSize: 12, fontWeight: "500", color: adaptiveColors.tertiaryLabel }}>{label}</Text>
     </View>
   );
 }

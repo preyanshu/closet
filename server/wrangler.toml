@@ -8,4 +8,8 @@ enabled = true
 # Local dev secrets live in server/.dev.vars (gitignored):
 #   CLOUDFLARE_ACCOUNT_ID=...
 #   CLOUDFLARE_API_TOKEN=...
+#   SUPABASE_URL=https://YOUR-PROJECT.supabase.co        (optional: require sign-in)
+#   SUPABASE_ANON_KEY=...                                  (optional: require sign-in)
+#   REVENUECAT_SECRET_KEY=sk_...                           (optional: require an active subscription)
+#   REVENUECAT_ENTITLEMENT=pro
 # Run locally with `npm run dev`; no deploy or AI binding required.

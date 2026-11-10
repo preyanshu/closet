@@ -240,7 +240,7 @@ cheap typed judgments.
 - **Chat lane is plain text + a `show_outfits` tool** (JSON quoting was unreliable on the
   streaming model): the reply is normal prose, and the model renders cards by calling
   `show_outfits({ looks: [{ items, label, reason }] })`. Item ids never appear in the chat
-  text. The parser still accepts the legacy `<<<OUTFITS>>>` pipe block and JSON envelope.
+  text. The parser still accepts the legacy `<<<OUTFITS>>>` pipe block and JSON envelope. Replies are asked not to use em dashes, and final text/card copy is sanitized so `—` never renders.
 - `createReplyStream` streams only user-facing text — everything before the legacy marker (or
   the legacy `reply` field) — so tool/scaffolding content never flashes in the bubble.
 - `CHAT_SYSTEM` is conversational and standalone (not derived from the compose brief). It
@@ -249,7 +249,8 @@ cheap typed judgments.
 
 ### Server (`server/src/index.ts`)
 - `POST /v1/style/turn` — thin proxy `{ messages, tools, max_tokens?, temperature? }` →
-  `{ tool_calls }` (`normalizeToolCalls`, handles function-wrapped/flat shapes) or `{ text }`.
+  `{ tool_calls, text? }` (`normalizeToolCalls`, handles function-wrapped/flat shapes) or
+  `{ text }`; a turn can carry both prose and tool calls.
 - `POST /v1/style/stream` — SSE variant over the OpenAI-compatible
   `/ai/v1/chat/completions` endpoint (`stream: true`). Accumulates fragmented `tool_calls`
   arguments by index, forwards `event: delta` text (string or content-array chunks),
@@ -330,11 +331,12 @@ Provider stays swappable (clef-flash ↔ Jev) = server model-id change only.
   visibly-different retry. Retry is outfit-specific and forces `show_outfits`.
   Failures keep any streamed prose and add a bare Retry control, never a fabricated stylist line.
 - **Streaming + activity**: chat uses `runStyleTurnStream` (SSE `/v1/style/stream`) and renders
-  the reply token-by-token (40ms throttle). While a turn runs, a **single live status line**
-  shows "Thinking…" or the one tool currently running ("Searching your pieces · black…"); tools
-  execute with a short 240ms dwell so each is perceptible, and the line advances instead of
-  stacking every call at once. `show_outfits` renders real image cards; ids stay out of the
-  bubble. An empty/failed turn shows no fake text, just Retry (any partial prose is preserved).
+  the reply token-by-token (40ms throttle). Tools appear as a live feed that grows one row at a
+  time, with a spinner on the current call and a checkmark when it finishes ("Searching your
+  wardrobe · black", then "Thinking…" while the model decides the next step). A short 240ms
+  dwell per tool makes each call perceptible, and finished rows stay visible after the answer.
+  `show_outfits` renders real image cards; ids stay out of the bubble. An empty/failed turn
+  shows no fake text, just Retry (any partial prose is preserved).
 - One request runs at a time; history includes prior outfit-bearing turns. Typing indicator
   + haptics throughout.
 - Typed `ChatMessage` (user/alta text + `outfits?` + error kinds); per-message agent sessions

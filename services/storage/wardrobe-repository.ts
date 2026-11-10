@@ -1,258 +1,175 @@
-import type {
-  AvailabilityStatus,
-  FeedbackEvent,
-  Item,
-  ItemRole,
-  LifecycleStatus,
-  Outfit,
-  OutfitItemRef,
-  OutfitMetadata,
-  OutfitSource,
-  Plan,
-  ProcessingStatus,
-  WarmthBand,
-  WearEvent,
-} from "@/types/domain";
-import { DEFAULT_WEARER_PRESENTATION, type UserProfileMetadata } from "@/types/domain";
-import { getDatabase, type WardrobeDatabase } from "@/services/storage/database";
+import { WardrobeApiError } from "@/services/api/wardrobe-api";
+import { currentCloudUser, fetchAllRecords, putRecord, removeRecord } from "@/services/cloud/cloud-store";
+import { isLocalFile, removeImages, signedUrls, uploadImage } from "@/services/cloud/images";
+import { File, Paths } from "expo-file-system";
+import { guessAlternateRoles } from "@/services/item-roles";
+import type { FeedbackEvent, Item, Outfit, Plan, UserProfileMetadata, WearEvent } from "@/types/domain";
+import { DEFAULT_WEARER_PRESENTATION } from "@/types/domain";
+
+/**
+ * Storage for the closet, backed entirely by the cloud (Supabase). There is no
+ * on-device database: everything loads once after sign-in, and every change is
+ * queued to the cloud right away (see services/cloud/cloud-store.ts).
+ *
+ * Preferences are small JSON blobs (favourites, saved-look ids, the daily pool,
+ * look memory...). They are kept in an in-memory map after the first load so
+ * reads stay instant, and written through to the cloud.
+ */
 
 export type WardrobeSnapshot = {
   items: Item[];
   outfits: Outfit[];
   savedLookIds: string[];
   favoriteIds: string[];
+  favoriteLookIds: string[];
   stylePreferences: string[] | null;
   /** User profile metadata (presentation etc.) — styles are tailored to it. */
   profile: UserProfileMetadata;
+  /** Whether first-run onboarding was finished on any device. */
+  onboardingDone: boolean;
 };
 
 export const PREFERENCE_KEYS = {
   savedLooks: "saved_look_ids",
   favorites: "favorite_item_ids",
+  favoriteLooks: "favorite_look_ids",
   style: "style_preferences",
   dailyLooks: "daily_looks_v1",
   mockCleanup: "mock_cleanup_v1",
   profile: "profile_metadata_v1",
+  /** Which wearer setting the vibe tags were last brought up to date for. */
+  vibeBackfill: "vibe_backfill_v1",
+  /** Set when first-run onboarding is finished (an ISO timestamp). */
+  onboardingDone: "onboarding_done_v1",
 } as const;
 
-const ITEM_COLUMNS = [
-  "id", "owner_id", "name", "category", "subcategory", "role", "primary_color",
-  "secondary_colors", "style_tags", "pattern", "sleeve_length", "fit", "visible_texture",
-  "formality", "warmth_band", "brand", "original_asset_uri", "display_asset_uri",
-  "price_minor", "price_currency", "wear_count", "last_worn", "availability_status",
-  "lifecycle_status", "processing_status", "created_at", "updated_at", "revision", "ai_attributes",
-] as const;
+const preferences = new Map<string, string>();
 
-const OUTFIT_COLUMNS = [
-  "id", "owner_id", "label", "source", "description", "item_ids", "items", "aesthetic_id",
-  "tags", "preview_uri", "metadata", "is_demo", "current_revision_id", "archived_at",
-  "created_at", "updated_at",
-] as const;
-
-type ItemRow = {
-  id: string; owner_id: string | null; name: string; category: string; subcategory: string | null;
-  role: string; primary_color: string; secondary_colors: string; style_tags: string;
-  pattern: string | null; sleeve_length: string | null; fit: string | null; visible_texture: string | null;
-  formality: string | null; warmth_band: string | null; brand: string | null;
-  original_asset_uri: string; display_asset_uri: string; price_minor: number | null;
-  price_currency: string; wear_count: number; last_worn: string | null; availability_status: string;
-  lifecycle_status: string; processing_status: string; created_at: string; updated_at: string;
-  revision: number; ai_attributes: string | null;
-};
-
-type OutfitRow = {
-  id: string; owner_id: string | null; label: string; source: string; description: string;
-  item_ids: string; items: string | null; aesthetic_id: string; tags: string | null;
-  preview_uri: string | null; metadata: string | null; is_demo: number; current_revision_id: string | null;
-  archived_at: string | null; created_at: string | null; updated_at: string | null;
-};
-
-function bind(columns: readonly string[]): string {
-  return columns.map(() => "?").join(", ");
+/** Forget everything loaded for the previous user (sign-out or a different account). */
+export function resetRepositoryCache() {
+  preferences.clear();
 }
 
-function parseJson<T>(value: string | null, fallback: T): T {
+const parseJson = <T,>(value: string | undefined, fallback: T): T => {
   if (!value) return fallback;
   try {
     return JSON.parse(value) as T;
   } catch {
     return fallback;
   }
-}
+};
 
-export function itemToRow(item: Item): (string | number | null)[] {
-  return [
-    item.id, item.ownerId ?? null, item.name, item.category, item.subcategory ?? null, item.role,
-    item.primaryColor, JSON.stringify(item.secondaryColors), JSON.stringify(item.styleTags),
-    item.pattern ?? null, item.sleeveLength ?? null, item.fit ?? null, item.visibleTexture ?? null,
-    item.formality ?? null, item.warmthBand ?? null, item.brand ?? null, item.originalAssetUri,
-    item.displayAssetUri, item.priceMinor, item.priceCurrency, item.wearCount, item.lastWorn ?? null,
-    item.availabilityStatus, item.lifecycleStatus, item.processingStatus, item.createdAt, item.updatedAt,
-    item.revision, item.aiAttributes ? JSON.stringify(item.aiAttributes) : null,
-  ];
-}
+// ── Items ────────────────────────────────────────────────────────────────────
 
-function rowToItem(row: ItemRow): Item {
+/** What is stored for a piece: the record minus per-device uris, plus storage paths. Uploads photos that are still local. */
+async function buildItemData(userId: string, item: Item): Promise<Record<string, unknown>> {
+  let displayPath = item.displayAssetPath;
+  let originalPath = item.originalAssetPath;
+  if (isLocalFile(item.displayAssetUri)) displayPath = await uploadImage(userId, item.id, "display", item.displayAssetUri);
+  if (item.originalAssetUri === item.displayAssetUri) originalPath = displayPath;
+  else if (isLocalFile(item.originalAssetUri)) originalPath = await uploadImage(userId, item.id, "original", item.originalAssetUri);
+  const { displayAssetUri, originalAssetUri, ...rest } = item;
   return {
-    id: row.id,
-    ownerId: row.owner_id ?? undefined,
-    name: row.name,
-    category: row.category as Item["category"],
-    subcategory: row.subcategory ?? undefined,
-    role: row.role as ItemRole,
-    primaryColor: row.primary_color,
-    secondaryColors: parseJson<string[]>(row.secondary_colors, []),
-    styleTags: parseJson<string[]>(row.style_tags, []),
-    pattern: row.pattern ?? undefined,
-    sleeveLength: row.sleeve_length ?? undefined,
-    fit: row.fit ?? undefined,
-    visibleTexture: row.visible_texture ?? undefined,
-    formality: row.formality ?? undefined,
-    warmthBand: (row.warmth_band as WarmthBand | null) ?? undefined,
-    brand: row.brand ?? undefined,
-    originalAssetUri: row.original_asset_uri,
-    displayAssetUri: row.display_asset_uri,
-    priceMinor: row.price_minor,
-    priceCurrency: row.price_currency,
-    wearCount: row.wear_count,
-    lastWorn: row.last_worn,
-    availabilityStatus: row.availability_status as AvailabilityStatus,
-    lifecycleStatus: row.lifecycle_status as LifecycleStatus,
-    processingStatus: row.processing_status as ProcessingStatus,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    revision: row.revision,
-    aiAttributes: row.ai_attributes ? (JSON.parse(row.ai_attributes) as Item["aiAttributes"]) : undefined,
-  };
-}
-
-export function outfitToRow(outfit: Outfit): (string | number | null)[] {
-  return [
-    outfit.id, outfit.ownerId ?? null, outfit.label, outfit.source, outfit.description,
-    JSON.stringify(outfit.itemIds), outfit.items ? JSON.stringify(outfit.items) : null,
-    outfit.aestheticId, outfit.tags ? JSON.stringify(outfit.tags) : null, outfit.previewUri ?? null,
-    outfit.metadata ? JSON.stringify(outfit.metadata) : null, outfit.isDemo ? 1 : 0,
-    outfit.currentRevisionId ?? null, outfit.archivedAt ?? null, outfit.createdAt ?? null,
-    outfit.updatedAt ?? null,
-  ];
-}
-
-function rowToOutfit(row: OutfitRow): Outfit {
-  return {
-    id: row.id,
-    ownerId: row.owner_id ?? undefined,
-    label: row.label,
-    source: row.source as OutfitSource,
-    description: row.description,
-    itemIds: parseJson<string[]>(row.item_ids, []),
-    items: row.items ? parseJson<OutfitItemRef[]>(row.items, []) : undefined,
-    aestheticId: row.aesthetic_id,
-    tags: row.tags ? parseJson<string[]>(row.tags, []) : undefined,
-    previewUri: row.preview_uri ?? undefined,
-    metadata: row.metadata ? parseJson<OutfitMetadata>(row.metadata, {}) : undefined,
-    isDemo: row.is_demo === 1,
-    currentRevisionId: row.current_revision_id ?? undefined,
-    archivedAt: row.archived_at ?? undefined,
-    createdAt: row.created_at ?? undefined,
-    updatedAt: row.updated_at ?? undefined,
-  };
-}
-
-/** In-memory snapshot used when no SQLite driver is available (web / failure). */
-function inMemorySnapshot(): WardrobeSnapshot {
-  return {
-    items: [],
-    outfits: [],
-    savedLookIds: [],
-    favoriteIds: [],
-    stylePreferences: null,
-    profile: { presentation: DEFAULT_WEARER_PRESENTATION },
+    ...rest,
+    displayAssetPath: displayPath,
+    originalAssetPath: originalPath,
+    // Only keep a raw uri when there is no stored photo (e.g. a bundled placeholder).
+    ...(displayPath ? {} : { displayAssetUri }),
+    ...(originalPath ? {} : { originalAssetUri }),
   };
 }
 
 /**
- * The app now starts empty: a fresh install has no demo wardrobe and the user
- * scans their own pieces. This one-time cleanup removes the mock seed from
- * existing installs (mock ids are `item-NN` / `mock-*`; scanned ids are
- * `scan-*`) and drops any cached looks built from them.
+ * Save a piece. If its photos are still on this phone they upload first; `onSaved`
+ * then receives the piece with cloud links so the app can stop pointing at local files.
  */
-async function cleanupDemoData(db: WardrobeDatabase): Promise<void> {
-  const done = await readPreference(db, PREFERENCE_KEYS.mockCleanup);
-  if (done) return;
-
-  await db.withTransactionAsync(async () => {
-    await db.runAsync("DELETE FROM items WHERE id LIKE 'item-%'");
-    await db.runAsync("DELETE FROM outfits WHERE id LIKE 'mock-%' OR is_demo = 1");
-    await db.runAsync("DELETE FROM preferences WHERE key LIKE 'daily_looks_v1%'");
-  });
-
-  for (const key of [PREFERENCE_KEYS.savedLooks, PREFERENCE_KEYS.favorites]) {
-    const raw = await readPreference(db, key);
-    if (!raw) continue;
-    const values = parseJson<string[]>(raw, []).filter((id) => !id.startsWith("mock-") && !/^item-\d+$/.test(id));
-    await db.runAsync("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", key, JSON.stringify(values));
-  }
-
-  await db.runAsync(
-    "INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)",
-    PREFERENCE_KEYS.mockCleanup,
-    new Date().toISOString(),
+export function persistItem(item: Item, onSaved?: (saved: Item) => void): void {
+  const userId = currentCloudUser();
+  if (!userId) return;
+  putRecord(
+    "item",
+    item.id,
+    () => buildItemData(userId, item),
+    onSaved
+      ? (data) => {
+          const displayPath = data.displayAssetPath as string | undefined;
+          const originalPath = data.originalAssetPath as string | undefined;
+          if (!displayPath && !originalPath) return;
+          const uploaded = isLocalFile(item.displayAssetUri) || isLocalFile(item.originalAssetUri);
+          if (!uploaded) return;
+          void signedUrls([displayPath, originalPath].filter((path): path is string => Boolean(path))).then((urls) => {
+            onSaved({
+              ...item,
+              displayAssetPath: displayPath,
+              originalAssetPath: originalPath,
+              displayAssetUri: (displayPath && urls.get(displayPath)) || item.displayAssetUri,
+              originalAssetUri: (originalPath && urls.get(originalPath)) || item.originalAssetUri,
+            });
+            // The cleaned-up photo the app made is in the cloud now; don't keep a second copy on the phone.
+            // (Photos from the camera roll or camera cache aren't ours to delete.) Wait a moment so the
+            // screen has switched to the cloud link first.
+            setTimeout(() => {
+              for (const uri of new Set([item.displayAssetUri, item.originalAssetUri])) {
+                if (isLocalFile(uri) && uri.startsWith(Paths.document.uri)) {
+                  try { new File(uri).delete(); } catch { /* already gone */ }
+                }
+              }
+            }, 2000);
+          });
+        }
+      : undefined,
   );
 }
 
-async function readPreference(db: WardrobeDatabase, key: string): Promise<string | null> {
-  const row = await db.getFirstAsync<{ value: string }>("SELECT value FROM preferences WHERE key = ?", key);
-  return row?.value ?? null;
+export function deleteItem(itemId: string, imagePaths: Array<string | undefined> = []): void {
+  removeRecord("item", itemId, () => removeImages(imagePaths.filter((path): path is string => Boolean(path))));
 }
 
-export async function loadWardrobeSnapshot(): Promise<WardrobeSnapshot> {
-  const db = await getDatabase();
-  if (!db) return inMemorySnapshot();
+// ── Looks ────────────────────────────────────────────────────────────────────
 
-  await cleanupDemoData(db);
-
-  const itemRows = await db.getAllAsync<ItemRow>("SELECT * FROM items ORDER BY created_at DESC, id ASC");
-  const outfitRows = await db.getAllAsync<OutfitRow>("SELECT * FROM outfits");
-  const savedLooks = await readPreference(db, PREFERENCE_KEYS.savedLooks);
-  const favorites = await readPreference(db, PREFERENCE_KEYS.favorites);
-  const style = await readPreference(db, PREFERENCE_KEYS.style);
-  const profileRaw = await readPreference(db, PREFERENCE_KEYS.profile);
-  const profile = profileRaw ? parseJson<UserProfileMetadata>(profileRaw, {}) : {};
-
-  return {
-    items: itemRows.map(rowToItem),
-    outfits: outfitRows.map(rowToOutfit),
-    savedLookIds: parseJson<string[]>(savedLooks, []),
-    favoriteIds: parseJson<string[]>(favorites, []),
-    stylePreferences: style ? parseJson<string[]>(style, []) : null,
-    profile: { presentation: profile.presentation ?? DEFAULT_WEARER_PRESENTATION },
-  };
+export function persistOutfit(outfit: Outfit): void {
+  // Stamp an edit time so the newest version is identifiable.
+  const stamped = outfit.updatedAt ? outfit : { ...outfit, updatedAt: new Date().toISOString() };
+  putRecord("outfit", outfit.id, async () => ({ ...stamped }));
 }
 
-export async function persistItem(item: Item): Promise<void> {
-  const db = await getDatabase();
-  if (!db) return;
-  const statement = `INSERT OR REPLACE INTO items (${ITEM_COLUMNS.join(", ")}) VALUES (${bind(ITEM_COLUMNS)})`;
-  await db.runAsync(statement, itemToRow(item));
+export function deleteOutfit(outfitId: string): void {
+  removeRecord("outfit", outfitId);
 }
 
-export async function persistOutfit(outfit: Outfit): Promise<void> {
-  const db = await getDatabase();
-  if (!db) return;
-  const statement = `INSERT OR REPLACE INTO outfits (${OUTFIT_COLUMNS.join(", ")}) VALUES (${bind(OUTFIT_COLUMNS)})`;
-  await db.runAsync(statement, outfitToRow(outfit));
+// ── Events ───────────────────────────────────────────────────────────────────
+
+export function recordWearEvent(event: WearEvent): void {
+  putRecord("wear_event", event.id, async () => ({ ...event }));
 }
 
-export async function deleteOutfit(outfitId: string): Promise<void> {
-  const db = await getDatabase();
-  if (!db) return;
-  await db.runAsync("DELETE FROM outfits WHERE id = ?", outfitId);
+export function savePlan(plan: Plan): void {
+  putRecord("plan", plan.id, async () => ({ ...plan }));
 }
 
-export async function deleteItem(itemId: string): Promise<void> {
-  const db = await getDatabase();
-  if (!db) return;
-  await db.runAsync("DELETE FROM items WHERE id = ?", itemId);
+export function recordFeedbackEvent(event: FeedbackEvent): void {
+  putRecord("feedback", event.id, async () => ({ ...event }));
+}
+
+// ── Preferences ──────────────────────────────────────────────────────────────
+
+/** Read a preference (`null` when absent). Instant: they are all loaded after sign-in. */
+export async function readPreferenceValue(key: string): Promise<string | null> {
+  return preferences.get(key) ?? null;
+}
+
+export async function writePreference(key: string, value: string): Promise<void> {
+  preferences.set(key, value);
+  putRecord("preference", key, async () => ({ value }));
+}
+
+/** Delete every preference whose key starts with `prefix` (retired caches). */
+export async function deletePreferencesLike(prefix: string): Promise<void> {
+  for (const key of [...preferences.keys()]) {
+    if (!key.startsWith(prefix)) continue;
+    preferences.delete(key);
+    removeRecord("preference", key);
+  }
 }
 
 /** Persist the user's profile metadata (presentation etc.). */
@@ -260,49 +177,51 @@ export async function saveProfileMetadata(profile: UserProfileMetadata): Promise
   await writePreference(PREFERENCE_KEYS.profile, JSON.stringify(profile));
 }
 
-export async function writePreference(key: string, value: string): Promise<void> {
-  const db = await getDatabase();
-  if (!db) return;
-  await db.runAsync("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", key, value);
-}
+// ── Loading ──────────────────────────────────────────────────────────────────
 
-/** Read a preference value (`null` when absent / no driver). */
-export async function readPreferenceValue(key: string): Promise<string | null> {
-  const db = await getDatabase();
-  if (!db) return null;
-  return readPreference(db, key);
-}
+/** Load the signed-in user's whole closet from the cloud. */
+export async function loadWardrobeSnapshot(): Promise<WardrobeSnapshot> {
+  const userId = currentCloudUser();
+  if (!userId) throw new WardrobeApiError("Sign in to load your closet.", "not_configured", "no signed-in user");
+  const records = await fetchAllRecords();
 
-export async function recordWearEvent(event: WearEvent): Promise<void> {
-  const db = await getDatabase();
-  if (!db) return;
-  await db.runAsync(
-    `INSERT OR REPLACE INTO wear_events (id, owner_id, local_date, timezone, occurred_at, outfit_id, outfit_revision_id, item_ids, source, created_at, updated_at, undone_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    event.id, event.ownerId ?? null, event.localDate, event.timezone, event.occurredAt ?? null,
-    event.outfitId ?? null, event.outfitRevisionId ?? null, JSON.stringify(event.itemIds),
-    event.source, event.createdAt, event.updatedAt, event.undoneAt ?? null,
-  );
-}
+  preferences.clear();
+  const rawItems: Array<Record<string, unknown>> = [];
+  const outfits: Outfit[] = [];
+  for (const record of records) {
+    if (record.kind === "preference") preferences.set(record.id, String((record.data as { value?: unknown }).value ?? ""));
+    else if (record.kind === "item") rawItems.push(record.data);
+    else if (record.kind === "outfit") outfits.push(record.data as unknown as Outfit);
+  }
 
-export async function savePlan(plan: Plan): Promise<void> {
-  const db = await getDatabase();
-  if (!db) return;
-  await db.runAsync(
-    `INSERT OR REPLACE INTO plans (id, owner_id, local_date, outfit_id, outfit_revision_id, note, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    plan.id, plan.ownerId ?? null, plan.localDate, plan.outfitId ?? null,
-    plan.outfitRevisionId ?? null, plan.note ?? null, plan.createdAt, plan.updatedAt,
-  );
-}
+  // One batch call signs every photo link.
+  const paths = rawItems.flatMap((data) => [data.displayAssetPath, data.originalAssetPath]).filter((path): path is string => typeof path === "string" && path.length > 0);
+  const urls = paths.length > 0 ? await signedUrls(paths) : new Map<string, string>();
 
-export async function recordFeedbackEvent(event: FeedbackEvent): Promise<void> {
-  const db = await getDatabase();
-  if (!db) return;
-  await db.runAsync(
-    `INSERT OR REPLACE INTO feedback_events (id, owner_id, kind, outfit_id, outfit_revision_id, item_id, context, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    event.id, event.ownerId ?? null, event.kind, event.outfitId ?? null,
-    event.outfitRevisionId ?? null, event.itemId ?? null, event.context ?? null, event.createdAt,
-  );
+  const items = rawItems
+    .map((data) => {
+      const displayPath = data.displayAssetPath as string | undefined;
+      const originalPath = data.originalAssetPath as string | undefined;
+      const item = {
+        ...data,
+        displayAssetUri: (displayPath && urls.get(displayPath)) || (data.displayAssetUri as string | undefined) || "",
+        originalAssetUri: (originalPath && urls.get(originalPath)) || (data.originalAssetUri as string | undefined) || (displayPath && urls.get(displayPath)) || "",
+      } as unknown as Item;
+      // Pieces saved before alternate roles existed get them decided once.
+      return item.alternateRoles === undefined ? { ...item, alternateRoles: guessAlternateRoles(item) } : item;
+    })
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : a.id.localeCompare(b.id)));
+
+  const profile = parseJson<UserProfileMetadata>(preferences.get(PREFERENCE_KEYS.profile), {});
+  const style = preferences.get(PREFERENCE_KEYS.style);
+  return {
+    items,
+    outfits,
+    savedLookIds: parseJson<string[]>(preferences.get(PREFERENCE_KEYS.savedLooks), []),
+    favoriteIds: parseJson<string[]>(preferences.get(PREFERENCE_KEYS.favorites), []),
+    favoriteLookIds: parseJson<string[]>(preferences.get(PREFERENCE_KEYS.favoriteLooks), []),
+    stylePreferences: style ? parseJson<string[]>(style, []) : null,
+    profile: { presentation: profile.presentation ?? DEFAULT_WEARER_PRESENTATION },
+    onboardingDone: preferences.has(PREFERENCE_KEYS.onboardingDone),
+  };
 }

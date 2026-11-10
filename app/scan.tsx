@@ -1,6 +1,8 @@
-import { aesthetics, categoryLabels, type ClothingCategory } from "@/data/mock";
+import { categoryLabels, type ClothingCategory } from "@/data/mock";
+import { vibeLabel, vibesFor } from "@/services/vibes";
 import { defaultRoleForCategory } from "@/types/taxonomy";
 import { adaptiveColors, radius, Button, GlassPillButton, ModalHeader, WardrobeIcon } from "@/components/ui";
+import { errorMessage } from "@/services/api/wardrobe-api";
 import { AUTO_CONFIRM_THRESHOLD, detectGarment, detectItemPresence, suggestAesthetics, toAiAttributes, type GarmentAttributes } from "@/services/garment-detect";
 import { stageGarment } from "@/services/garment-staging";
 import { useCloset } from "@/state/closet-context";
@@ -122,7 +124,6 @@ const categoryShortLabels: Record<ClothingCategory, string> = {
 const categoryOrder: ClothingCategory[] = ["top", "bottom", "outerwear", "shoes", "accessory"];
 const colorOptions = ["black", "white", "navy", "gray", "brown", "cream", "blue", "camel"];
 const lightColors = ["white", "ivory", "cream", "camel"];
-const aestheticOptions = aesthetics.map((a) => a.id);
 const swatchColor = (color: string) => {
   const map: Record<string, string> = { white: "#F5F1E8", ivory: "#F3EAD9", cream: "#EFE3CB", navy: "#1F2A44", charcoal: "#3A3A3A", camel: "#C08A4E", brown: "#6B4A2F", gray: "#8E8E93", blue: "#3B6EA8", black: "#0E0D0B" };
   return map[color] ?? color;
@@ -141,7 +142,7 @@ const beautify = (id: string) => id.replace(/-/g, " ").replace(/\b\w/g, (c) => c
 const resolveStagedSource = (uri: string | null) => uri ? { uri } : null;
 
 export default function ScanModal() {
-  const { addItem, setAddedMessage } = useCloset();
+  const { addItem, setAddedMessage, profile } = useCloset();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { height, width } = useWindowDimensions();
@@ -248,7 +249,7 @@ export default function ScanModal() {
         category: detected.category,
         color: detected.primary_color,
         price: null,
-        aesthetics: suggestAesthetics(detected),
+        aesthetics: suggestAesthetics(detected, profile.presentation),
         attrs: detected,
         confirmedFields,
         progress: 100,
@@ -260,7 +261,7 @@ export default function ScanModal() {
         ...it,
         status: "error" as ItemStatus,
         name: it.name === "Scanning…" ? "Scanned piece" : it.name,
-        error: e?.message ?? "Could not analyze this piece.",
+        error: errorMessage(e, "Couldn't analyze this piece. Try again, or add the details yourself."),
       }));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
@@ -382,13 +383,17 @@ export default function ScanModal() {
           })
         : undefined;
 
+      // A category the user changed in review no longer matches the detected
+      // type/role; re-derive the role so the stylist sees what they chose.
+      const keepDetected = Boolean(attrs) && !categoryEdited;
       addItem({
         id: `scan-${Date.now()}-${item.id}`,
         ownerId: "local-demo",
         name: item.name,
         category: item.category,
-        role: attrs?.role ?? defaultRoleForCategory(item.category),
-        subcategory: attrs?.subcategory || undefined,
+        role: keepDetected ? attrs!.role : defaultRoleForCategory(item.category),
+        alternateRoles: keepDetected ? attrs!.alternate_roles : undefined,
+        subcategory: keepDetected ? attrs!.subcategory || undefined : undefined,
         primaryColor: item.color.toLowerCase(),
         secondaryColors: attrs?.secondary_colors ?? [],
         styleTags: item.aesthetics,
@@ -827,6 +832,7 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
   const [customColor, setCustomColor] = useState(swatchColor(item.color));
   const [customColors, setCustomColors] = useState<string[]>(colorOptions.includes(item.color) ? [] : [item.color.toUpperCase()]);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const aestheticOptions = vibesFor(useCloset().profile.presentation).map((vibe) => vibe.id);
   const [selectedAesthetics, setSelectedAesthetics] = useState(item.aesthetics);
   const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set(item.confirmedFields));
   const [attrs, setAttrs] = useState<GarmentAttributes | null>(item.attrs);
@@ -999,7 +1005,7 @@ function ReviewSheet({ item, batchMode, position, total, onSave, onRetry, onRemo
         <ReviewField label="Vibes">
           <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>Choose any that fit.</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {aestheticOptions.map((option) => <ReviewChoice key={option} label={beautify(option)} selected={selectedAesthetics.includes(option)} onPress={() => setSelectedAesthetics((prev) => prev.includes(option) ? prev.filter((id) => id !== option) : [...prev, option])} />)}
+            {aestheticOptions.map((option) => <ReviewChoice key={option} label={vibeLabel(option)} selected={selectedAesthetics.includes(option)} onPress={() => setSelectedAesthetics((prev) => prev.includes(option) ? prev.filter((id) => id !== option) : [...prev, option])} />)}
           </View>
         </ReviewField>
       </ScrollView>

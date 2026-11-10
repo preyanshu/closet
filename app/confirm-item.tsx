@@ -75,7 +75,7 @@ export default function ConfirmItemScreen() {
 
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: adaptiveColors.canvas }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-      <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
+      <Screen modal>
         <ModalHeader title="Review details" subtitle="Edit each detail before adding this piece." />
 
         <Pressable onPress={pickImage} style={{ width: "100%", aspectRatio: 1, borderRadius: 20, backgroundColor: adaptiveColors.surfaceMuted, overflow: "hidden", alignItems: "center", justifyContent: "center" }}>

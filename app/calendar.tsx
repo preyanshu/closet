@@ -31,7 +31,7 @@ export default function CalendarScreen() {
   });
 
   return (
-    <Screen contentContainerStyle={{ gap: 24, paddingTop: 20 }}>
+    <Screen modal>
       <ModalHeader title="Outfit plan" subtitle="See your looks for the week." />
 
       <View style={{ flexDirection: "row", gap: 4 }}>

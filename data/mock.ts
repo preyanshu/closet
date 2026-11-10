@@ -10,6 +10,7 @@ import {
   type WarmthBand,
 } from "@/types/domain";
 import { categoryLabels } from "@/types/taxonomy";
+import { VIBES } from "@/services/vibes";
 
 export type { ClothingCategory, Item, Outfit } from "@/types/domain";
 export { categoryLabels };
@@ -225,14 +226,9 @@ export const mockOutfitAlbums: Outfit[] = [
   },
 ];
 
-export const aesthetics: Aesthetic[] = [
-  { id: "old-money", label: "Old money", coveragePercent: 82 },
-  { id: "office", label: "Office", coveragePercent: 76 },
-  { id: "streetwear", label: "Streetwear", coveragePercent: 64 },
-  { id: "clean-girl", label: "Clean girl", coveragePercent: 88 },
-  { id: "minimal", label: "Minimal", coveragePercent: 91 },
-  { id: "evening", label: "Evening", coveragePercent: 58 }
-];
+/** Derived from the shared vibe catalog. Coverage is placeholder data for the Style tab. */
+const PLACEHOLDER_COVERAGE: Record<string, number> = { "old-money": 82, office: 76, streetwear: 64, "clean-girl": 88, minimal: 91, evening: 58 };
+export const aesthetics: Aesthetic[] = VIBES.map((vibe) => ({ id: vibe.id, label: vibe.label, coveragePercent: PLACEHOLDER_COVERAGE[vibe.id] ?? 60 }));
 
 export const clothingItems: Item[] = [
   seedItem({ id: "item-01", name: "Ribbed white tank", category: "top", role: "base_top", subcategory: "Tank", primaryColor: "white", secondaryColors: [], styleTags: ["clean-girl", "minimal"], pattern: "solid", sleeveLength: "sleeveless", fit: "fitted", visibleTexture: "ribbed cotton", formality: "casual", warmthBand: "light", brand: "COS", imageUrl: "@/assets/item-1.png", lastWorn: "2026-07-18", price: 28, wearCount: 12 }),

@@ -7,7 +7,9 @@
     "scheme": "wardrobe",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "usesAppleSignIn": true,
+      "bundleIdentifier": "com.preyanshu.wardrobe"
     },
     "android": {},
     "plugins": [
@@ -27,13 +29,14 @@
       "expo-image",
       "expo-status-bar",
       "expo-font",
-      "expo-sqlite",
       [
         "expo-location",
         {
           "locationWhenInUsePermission": "Allow Wardrobe to use your location to style for today's weather."
         }
-      ]
+      ],
+      "expo-secure-store",
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true

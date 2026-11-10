@@ -1,13 +1,17 @@
-import { adaptiveColors, radius, spacing, Button, CircularGlassButton as GlassButton, FilterChip, GlassLayer, ItemImage, NativeSwitch, Screen, SelectionRow, Sheet, WardrobeIcon } from "@/components/ui";
-import { aesthetics, categoryLabels, type ClothingCategory, type Item } from "@/data/mock";
+import { adaptiveColors, radius, spacing, Button, CircularGlassButton as GlassButton, EmptyState, FilterChip, PageHeader, GlassLayer, ItemImage, NativeSwitch, Screen, SelectionRow, Sheet, WardrobeIcon } from "@/components/ui";
+import { categoryLabels, type ClothingCategory, type Item } from "@/data/mock";
+import { vibesFor } from "@/services/vibes";
 import { priceToNumber } from "@/types/domain";
+import { availabilityLabels } from "@/types/taxonomy";
 import { useCloset } from "@/state/closet-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { type ComponentProps } from "react";
-import { useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import Animated, { Easing, FadeIn, FadeInDown, FadeOut, FadeOutDown, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 type SymbolName = ComponentProps<typeof SymbolView>["name"];
 type QuickFilter = "all" | "favorites" | "unworn";
@@ -38,24 +42,36 @@ const swatchColor = (color: string) => {
   return map[color] ?? color;
 };
 
-const seasonOf = (lastWorn: string | null | undefined): string | null => {
-  if (!lastWorn) return null;
-  const month = new Date(lastWorn).getMonth();
-  if (month === 11 || month <= 1) return "winter";
-  if (month <= 4) return "spring";
-  if (month <= 7) return "summer";
-  return "fall";
+/** Which warmth bands suit each season. Pieces with no warmth data never match a season filter. */
+const WARMTH_BY_SEASON: Record<string, string[]> = {
+  spring: ["light", "medium"],
+  summer: ["light"],
+  fall: ["medium", "heavy"],
+  winter: ["heavy", "medium"],
 };
 
-const costPerWearOf = (item: Item) => (item.wearCount > 0 ? (priceToNumber(item) ?? 0) / item.wearCount : priceToNumber(item) ?? 0);
+/** Cost per wear, or null when the price is unknown (never treated as free). */
+const costPerWearOf = (item: Item): number | null => {
+  const price = priceToNumber(item);
+  if (price == null) return null;
+  return item.wearCount > 0 ? price / item.wearCount : price;
+};
 
 const formatCostPerWear = (item: Item) => {
   const value = costPerWearOf(item);
+  if (value == null) return "—";
   return `$${value < 10 ? value.toFixed(2) : Math.round(value).toString()}`;
 };
 
+const wearLine = (item: Item) => {
+  if (item.wearCount === 0) return "Not worn yet";
+  return costPerWearOf(item) == null ? `${item.wearCount} wears` : `${formatCostPerWear(item)}/wear · ${item.wearCount} wears`;
+};
+
 export default function ClosetScreen() {
-  const { items, isFavorite, toggleFavorite } = useCloset();
+  const insets = useSafeAreaInsets();
+  const { items, favoriteIds, isFavorite, toggleFavorite, removeItems, setAvailability, setFavorites, profile } = useCloset();
+  const aesthetics = vibesFor(profile.presentation);
   const [category, setCategory] = useState<ClothingCategory | "all">("all");
   const [quick, setQuick] = useState<QuickFilter>("all");
   const [search, setSearch] = useState("");
@@ -67,53 +83,108 @@ export default function ClosetScreen() {
   const [showSort, setShowSort] = useState(false);
   const [layout, setLayout] = useState<LayoutMode>("cards");
   const [galleryWidth, setGalleryWidth] = useState(0);
-  const [pressedGalleryId, setPressedGalleryId] = useState<string | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const galleryGap = spacing.xs;
   const galleryColumnWidth = galleryWidth > 0
     ? Math.floor((galleryWidth - galleryGap * 2) / 3)
     : "31%";
 
-  const favoritesCount = items.filter((item) => isFavorite(item.id)).length;
-  const unwornCount = items.filter((item) => !item.lastWorn).length;
+  const favoritesCount = useMemo(() => items.filter((item) => favoriteIds.has(item.id)).length, [items, favoriteIds]);
+  const unwornCount = useMemo(() => items.filter((item) => !item.lastWorn).length, [items]);
   const activeFilterCount = selectedColors.length + selectedSeasons.length + (aestheticId === "all" ? 0 : 1) + (quick === "all" ? 0 : 1);
 
-  const categoryCounts = items.reduce<Record<string, number>>((counts, item) => {
-    counts[item.category] = (counts[item.category] ?? 0) + 1;
-    return counts;
-  }, { all: items.length });
+  const categoryCounts = useMemo(
+    () => items.reduce<Record<string, number>>((counts, item) => {
+      counts[item.category] = (counts[item.category] ?? 0) + 1;
+      return counts;
+    }, { all: items.length }),
+    [items],
+  );
 
-  const filteredItems = items.filter((item) => {
-    const categoryMatches = category === "all" || item.category === category;
-    const searchMatches =
-      !search ||
-      item.name.toLowerCase().includes(search.toLowerCase()) ||
-      item.primaryColor.toLowerCase().includes(search.toLowerCase()) ||
-      categoryLabels[item.category].toLowerCase().includes(search.toLowerCase());
-    const quickMatches = quick === "all" || (quick === "favorites" ? isFavorite(item.id) : !item.lastWorn);
-    const colorMatches = selectedColors.length === 0 || selectedColors.includes(item.primaryColor);
-    const seasonMatches = selectedSeasons.length === 0 || (seasonOf(item.lastWorn) != null && selectedSeasons.includes(seasonOf(item.lastWorn)!));
-    const aestheticMatches = aestheticId === "all" || item.styleTags.includes(aestheticId);
-    return categoryMatches && searchMatches && quickMatches && colorMatches && seasonMatches && aestheticMatches;
-  });
-
-  const sortedItems = [...filteredItems].sort((a, b) => {
-    switch (sortKey) {
-      case "recent": {
-        if (!a.lastWorn && !b.lastWorn) return 0;
-        if (!a.lastWorn) return 1;
-        if (!b.lastWorn) return -1;
-        return new Date(b.lastWorn).getTime() - new Date(a.lastWorn).getTime();
+  const sortedItems = useMemo(() => {
+    const query = search.toLowerCase();
+    const filtered = items.filter((item) => {
+      const categoryMatches = category === "all" || item.category === category;
+      const searchMatches =
+        !query ||
+        item.name.toLowerCase().includes(query) ||
+        item.primaryColor.toLowerCase().includes(query) ||
+        categoryLabels[item.category].toLowerCase().includes(query);
+      const quickMatches = quick === "all" || (quick === "favorites" ? favoriteIds.has(item.id) : !item.lastWorn);
+      const colorMatches = selectedColors.length === 0 || selectedColors.includes(item.primaryColor);
+      const seasonMatches = selectedSeasons.length === 0 || (item.warmthBand != null && selectedSeasons.some((season) => WARMTH_BY_SEASON[season]?.includes(item.warmthBand!)));
+      const aestheticMatches = aestheticId === "all" || item.styleTags.includes(aestheticId);
+      return categoryMatches && searchMatches && quickMatches && colorMatches && seasonMatches && aestheticMatches;
+    });
+    return filtered.sort((a, b) => {
+      switch (sortKey) {
+        case "recent": {
+          if (!a.lastWorn && !b.lastWorn) return 0;
+          if (!a.lastWorn) return 1;
+          if (!b.lastWorn) return -1;
+          return new Date(b.lastWorn).getTime() - new Date(a.lastWorn).getTime();
+        }
+        case "costPerWear":
+          return (costPerWearOf(a) ?? Infinity) - (costPerWearOf(b) ?? Infinity) || 0;
+        case "mostWorn":
+          return b.wearCount - a.wearCount;
+        case "price":
+          return (priceToNumber(b) ?? 0) - (priceToNumber(a) ?? 0);
+        case "name":
+          return a.name.localeCompare(b.name);
       }
-      case "costPerWear":
-        return costPerWearOf(a) - costPerWearOf(b);
-      case "mostWorn":
-        return b.wearCount - a.wearCount;
-      case "price":
-        return (priceToNumber(b) ?? 0) - (priceToNumber(a) ?? 0);
-      case "name":
-        return a.name.localeCompare(b.name);
-    }
-  });
+    });
+  }, [items, favoriteIds, category, quick, search, selectedColors, selectedSeasons, aestheticId, sortKey]);
+
+  const exitSelecting = () => {
+    setSelecting(false);
+    setSelectedIds(new Set());
+  };
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  /** Tap selects while in selection mode; long-press starts it. Stable so memoised tiles skip re-renders. */
+  const onTileTap = useCallback((id: string) => {
+    if (selecting) toggleSelected(id);
+    else router.push(`/item/${id}`);
+  }, [selecting, toggleSelected]);
+  const onTileLong = useCallback((id: string) => {
+    if (selecting) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setSelecting(true);
+    setSelectedIds(new Set([id]));
+  }, [selecting]);
+  const visibleIds = sortedItems.map((item) => item.id);
+  const selectedItems = useMemo(() => items.filter((item) => selectedIds.has(item.id)), [items, selectedIds]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const allFavorite = selectedItems.length > 0 && selectedItems.every((item) => favoriteIds.has(item.id));
+  const allLaundry = selectedItems.length > 0 && selectedItems.every((item) => item.availabilityStatus === "laundry");
+  const confirmRemove = () => {
+    const count = selectedItems.length;
+    if (count === 0) return;
+    Alert.alert(
+      `Remove ${count} ${count === 1 ? "piece" : "pieces"}?`,
+      "They'll be removed from your closet and from any looks that only use removed pieces. This can't be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            removeItems(selectedItems.map((item) => item.id));
+            exitSelecting();
+          },
+        },
+      ],
+    );
+  };
 
   const activeSort = sortOptions.find((option) => option.id === sortKey)!;
 
@@ -128,20 +199,18 @@ export default function ClosetScreen() {
 
   return (
     <Screen scroll={false}>
-      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ flexGrow: 1, gap: spacing.xl, paddingHorizontal: spacing.lg, paddingBottom: 160, paddingTop: spacing.xl }}>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <View style={{ gap: 3, flex: 1 }}>
-            <Text style={{ fontSize: 11, fontWeight: "800", letterSpacing: 2, color: adaptiveColors.secondaryLabel, textTransform: "uppercase" }}>Digital wardrobe</Text>
-            <Text style={{ fontSize: 36, fontWeight: "800", letterSpacing: -1.4, color: adaptiveColors.label, lineHeight: 40 }}>Closet</Text>
-            <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>
-              {items.length === 0 ? "A little space for everything you wear." : `${items.length} ${items.length === 1 ? "piece" : "pieces"} · ${unwornCount} never worn`}
-            </Text>
-          </View>
-          <View style={{ flexDirection: "row", gap: spacing.xs, marginTop: 4 }}>
-            {items.length > 0 ? <GlassButton icon="chart.line.uptrend.xyaxis" label="Wardrobe analytics" onPress={() => router.push("/analytics")} /> : null}
-            <GlassButton icon="plus" label="Scan clothes" onPress={() => router.push("/scan")} />
-          </View>
-        </View>
+      <ScrollView contentInsetAdjustmentBehavior="never" contentContainerStyle={{ flexGrow: 1, gap: spacing.xl, paddingHorizontal: spacing.lg, paddingBottom: 160, paddingTop: insets.top + spacing.xl }}>
+        <PageHeader
+          eyebrow="Digital wardrobe"
+          title="Closet"
+          subtitle={items.length === 0 ? "A little space for everything you wear." : `${items.length} ${items.length === 1 ? "piece" : "pieces"} · ${unwornCount} never worn`}
+          right={
+            <View style={{ flexDirection: "row", gap: spacing.xs }}>
+              {items.length > 0 ? <GlassButton icon="chart.line.uptrend.xyaxis" label="Wardrobe analytics" onPress={() => router.push("/analytics")} /> : null}
+              <GlassButton icon="plus" label="Scan clothes" onPress={() => router.push("/scan")} />
+            </View>
+          }
+        />
 
         {items.length > 0 ? <>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -170,122 +239,74 @@ export default function ClosetScreen() {
           </ScrollView>
         </View>
 
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <Text style={{ fontSize: 13, lineHeight: 18, fontWeight: "700", color: adaptiveColors.secondaryLabel, fontVariant: ["tabular-nums"] }}>{sortedItems.length} pieces</Text>
-          <View style={{ flexDirection: "row", gap: spacing.xs }}>
-            <GlassButton
-              icon={layout === "cards" ? "square.grid.2x2" : "rectangle.grid.1x2"}
-              label={`Switch to ${layout === "cards" ? "gallery" : "card"} view`}
-              onPress={() => setLayout((prev) => (prev === "cards" ? "gallery" : "cards"))}
-            />
-            <GlassButton icon="arrow.up.arrow.down" label={`Sort pieces, ${activeSort.label}`} onPress={() => setShowSort(true)} />
+        {selecting ? (
+          <View key="select-header" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <Pressable accessibilityRole="button" onPress={exitSelecting} hitSlop={8}>
+              <Text style={{ fontSize: 15, fontWeight: "700", color: adaptiveColors.accent }}>Cancel</Text>
+            </Pressable>
+            <Text style={{ fontSize: 15, fontWeight: "700", color: adaptiveColors.label, fontVariant: ["tabular-nums"] }}>
+              {selectedIds.size === 0 ? "Select pieces" : `${selectedIds.size} selected`}
+            </Text>
+            <Pressable accessibilityRole="button" onPress={() => setSelectedIds(allVisibleSelected ? new Set() : new Set(visibleIds))} hitSlop={8}>
+              <Text style={{ fontSize: 15, fontWeight: "700", color: adaptiveColors.accent }}>{allVisibleSelected ? "Clear" : "Select all"}</Text>
+            </Pressable>
           </View>
-        </View>
+        ) : (
+          <View key="default-header" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <Text style={{ fontSize: 13, lineHeight: 18, fontWeight: "700", color: adaptiveColors.secondaryLabel, fontVariant: ["tabular-nums"] }}>{sortedItems.length} {sortedItems.length === 1 ? "piece" : "pieces"}</Text>
+            <View style={{ flexDirection: "row", gap: spacing.xs }}>
+              <GlassButton icon="checkmark.circle" label="Select pieces" onPress={() => setSelecting(true)} />
+              <GlassButton
+                icon={layout === "cards" ? "square.grid.2x2" : "rectangle.grid.1x2"}
+                label={`Switch to ${layout === "cards" ? "gallery" : "card"} view`}
+                onPress={() => setLayout((prev) => (prev === "cards" ? "gallery" : "cards"))}
+              />
+              <GlassButton icon="arrow.up.arrow.down" label={`Sort pieces, ${activeSort.label}`} onPress={() => setShowSort(true)} />
+            </View>
+          </View>
+        )}
 
         </> : null}
 
-        {items.length === 0 ? <NewClosetState /> : sortedItems.length === 0 ? (
-          <EmptyState onClear={clearAllFilters} />
+        {items.length === 0 ? (
+          <EmptyState icon="tshirt" title="Room for your favorites" message="Start with your first piece." action={<Button onPress={() => router.push("/scan")}>Add a piece</Button>} />
+        ) : sortedItems.length === 0 ? (
+          <EmptyState icon="rectangle.on.rectangle.slash" title="No pieces found" message="Try a different filter or search." action={<Button variant="secondary" onPress={clearAllFilters}>Clear all filters</Button>} />
         ) : layout === "gallery" ? (
           <View
             onLayout={(event) => setGalleryWidth(event.nativeEvent.layout.width)}
             style={{ width: "100%", flexDirection: "row", flexWrap: "wrap", columnGap: galleryGap, rowGap: galleryGap }}
           >
-            {sortedItems.map((item) => {
-              const favorite = isFavorite(item.id);
-              return (
-                <Pressable
-                  key={item.id}
-                  accessibilityLabel={`Open ${item.name}`}
-                  onPress={() => router.push(`/item/${item.id}`)}
-                  onPressIn={() => setPressedGalleryId(item.id)}
-                  onPressOut={() => setPressedGalleryId(null)}
-                  style={{
-                    width: galleryColumnWidth,
-                    flexGrow: 0,
-                    flexShrink: 0,
-                    transform: [{ scale: pressedGalleryId === item.id ? 0.96 : 1 }],
-                  }}
-                >
-                  <View style={{ position: "relative" }}>
-                    <ItemImage imageUrl={item.displayAssetUri} label={item.name} style={{ aspectRatio: 1, borderRadius: 8 }} />
-                    <View style={{ position: "absolute", top: 4, right: 4 }}>
-                    <GlassButton
-                      icon={favorite ? "heart.fill" : "heart"}
-                      label={favorite ? "Remove from favorites" : "Add to favorites"}
-                      selected={favorite}
-                      size={36}
-                      tintColor={favorite ? adaptiveColors.destructive : adaptiveColors.label}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        toggleFavorite(item.id);
-                      }}
-                    />
-                    </View>
-                    <View style={{ position: "absolute", left: 4, bottom: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.55)" }}>
-                      <Text style={{ fontSize: 9, fontWeight: "800", color: "#FFF", fontVariant: ["tabular-nums"] }}>
-                        {item.wearCount === 0 ? "Unworn" : `${formatCostPerWear(item)}/wear`}
-                      </Text>
-                    </View>
-                  </View>
-                </Pressable>
-              );
-            })}
+            {sortedItems.map((item) => (
+              <ClosetTile key={item.id} item={item} layout="gallery" width={galleryColumnWidth} favorite={favoriteIds.has(item.id)} selected={selectedIds.has(item.id)} selecting={selecting} onTap={onTileTap} onLong={onTileLong} onFavorite={toggleFavorite} />
+            ))}
           </View>
         ) : (
           <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", rowGap: spacing.sm }}>
-            {sortedItems.map((item) => {
-              const favorite = isFavorite(item.id);
-              return (
-                <Pressable
-                  key={item.id}
-                  accessibilityLabel={`Open ${item.name}`}
-                  onPress={() => router.push(`/item/${item.id}`)}
-                  style={{
-                    width: "48%",
-                    flexGrow: 0,
-                    flexShrink: 0,
-                    paddingTop: cardImagePadding,
-                    paddingHorizontal: cardImagePadding,
-                    paddingBottom: 8,
-                    borderRadius: 22,
-                    borderCurve: "continuous",
-                    overflow: "hidden",
-                    backgroundColor: adaptiveColors.surface,
-                    borderWidth: 1,
-                    borderColor: adaptiveColors.border,
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.045)",
-                  }}
-                >
-                  <View style={{ position: "relative" }}>
-                    <ItemImage
-                      imageUrl={item.displayAssetUri}
-                      label={item.name}
-                      style={{ width: "100%", aspectRatio: 1, borderRadius: 12 }}
-                    />
-                    <View style={{ position: "absolute", top: 4, right: 4 }}>
-                      <GlassButton
-                        icon={favorite ? "heart.fill" : "heart"}
-                        label={favorite ? "Remove from favorites" : "Add to favorites"}
-                        selected={favorite}
-                        tintColor={favorite ? adaptiveColors.destructive : adaptiveColors.label}
-                        size={36}
-                        onPress={() => toggleFavorite(item.id)}
-                      />
-                    </View>
-                  </View>
-                  <View style={{ minHeight: 48, paddingHorizontal: 4, paddingTop: 10, justifyContent: "center", gap: 2 }}>
-                    <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 17, fontWeight: "700", includeFontPadding: false, color: adaptiveColors.label, letterSpacing: -0.1 }}>{item.name}</Text>
-                    <Text numberOfLines={1} style={{ fontSize: 11, lineHeight: 15, fontWeight: "500", includeFontPadding: false, color: adaptiveColors.secondaryLabel, fontVariant: ["tabular-nums"] }}>
-                      {item.wearCount === 0 ? "Not worn yet" : `${formatCostPerWear(item)}/wear · ${item.wearCount} wears`}
-                    </Text>
-                  </View>
-                </Pressable>
-              );
-            })}
+            {sortedItems.map((item) => (
+              <ClosetTile key={item.id} item={item} layout="cards" width="48%" favorite={favoriteIds.has(item.id)} selected={selectedIds.has(item.id)} selecting={selecting} onTap={onTileTap} onLong={onTileLong} onFavorite={toggleFavorite} />
+            ))}
           </View>
         )}
       </ScrollView>
+
+      {selecting ? (
+        <Animated.View entering={FadeInDown.duration(160).withInitialValues({ opacity: 0, transform: [{ translateY: 16 }] })} exiting={FadeOutDown.duration(120)} style={{ position: "absolute", left: spacing.lg, right: spacing.lg, bottom: 96, flexDirection: "row", gap: 8, padding: 8, borderRadius: 24, borderCurve: "continuous", backgroundColor: adaptiveColors.surfaceRaised, borderWidth: 1, borderColor: adaptiveColors.border, boxShadow: "0 10px 30px rgba(0,0,0,0.16)" }}>
+          <BulkAction
+            icon={allFavorite ? "heart.slash" : "heart"}
+            label={allFavorite ? "Unfavorite" : "Favorite"}
+            disabled={selectedIds.size === 0}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setFavorites(selectedItems.map((item) => item.id), !allFavorite); exitSelecting(); }}
+          />
+          <BulkAction
+            icon="tray.full"
+            label={allLaundry ? "Mark clean" : "Laundry"}
+            disabled={selectedIds.size === 0}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setAvailability(selectedItems.map((item) => item.id), allLaundry ? "available" : "laundry"); exitSelecting(); }}
+          />
+          <BulkAction icon="trash" label="Remove" destructive disabled={selectedIds.size === 0} onPress={confirmRemove} />
+        </Animated.View>
+      ) : null}
 
       <Sheet visible={showFilters} onDismiss={() => setShowFilters(false)} snapPoints={[]} title="Filters" subtitle="Find the pieces you’re looking for." footer={
         <View style={{ flexDirection: "row", gap: 12 }}>
@@ -436,65 +457,144 @@ function Chip({ label, icon, count, selected, onPress }: { label: string; icon?:
   );
 }
 
-function NewClosetState() {
-  return (
-    <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: spacing.xxxl, gap: spacing.xl }}>
-      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ alignItems: "center", justifyContent: "center", padding: spacing.sm }}>
-        <WardrobeIcon name="tshirt" color={adaptiveColors.tertiaryLabel} size={32} />
-      </View>
-      <View style={{ gap: spacing.sm, alignItems: "center", maxWidth: 300 }}>
-        <Text accessibilityRole="header" style={{ fontSize: 22, fontWeight: "600", letterSpacing: -0.5, color: adaptiveColors.label, textAlign: "center" }}>Room for your favorites</Text>
-        <Text style={{ fontSize: 14, lineHeight: 21, color: adaptiveColors.secondaryLabel, textAlign: "center" }}>Start with your first piece.</Text>
-      </View>
-      <Button onPress={() => router.push("/scan")} style={{ minHeight: 48, paddingHorizontal: spacing.xl, borderRadius: radius.pill }}>Add a piece</Button>
-    </View>
-  );
-}
+type ClosetTileProps = {
+  item: Item;
+  layout: LayoutMode;
+  width: number | string;
+  favorite: boolean;
+  selected: boolean;
+  selecting: boolean;
+  onTap: (id: string) => void;
+  onLong: (id: string) => void;
+  onFavorite: (id: string) => void;
+};
 
-function EmptyState({ onClear }: { onClear: () => void }) {
-  return (
-    <View style={{ alignItems: "center", gap: 8, paddingVertical: 36, paddingHorizontal: 24 }}>
-      <View style={{ width: 64, height: 64, borderRadius: 22, borderCurve: "continuous", backgroundColor: "rgba(0,0,0,0.04)", alignItems: "center", justifyContent: "center", marginBottom: 4 }}>
-        <SymbolView name="rectangle.on.rectangle.slash" tintColor="rgba(0,0,0,0.35)" size={28} />
-      </View>
-      <Text style={{ fontSize: 17, fontWeight: "700", letterSpacing: -0.3, color: adaptiveColors.label }}>No pieces found</Text>
-      <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel, textAlign: "center", lineHeight: 19 }}>Try a different filter, search, or add more items.</Text>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Clear all filters"
-        onPress={onClear}
-        style={{
-          minHeight: 48,
-          marginTop: 14,
-          paddingHorizontal: 22,
-          borderRadius: radius.pill,
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-          backgroundColor: adaptiveColors.accent,
-          boxShadow: "0 6px 18px rgba(164,94,42,0.22)",
+/**
+ * One grid tile. Memoised: toggling a single piece's availability or favorite
+ * only re-renders that tile, not the whole closet grid.
+ */
+const ClosetTile = memo(function ClosetTile({ item, layout, width, favorite, selected, selecting, onTap, onLong, onFavorite }: ClosetTileProps) {
+  const [pressed, setPressed] = useState(false);
+  const scale = useSharedValue(1);
+  useEffect(() => {
+    scale.value = withTiming(selected ? 0.95 : pressed ? 0.97 : 1, { duration: 110, easing: Easing.out(Easing.quad) });
+  }, [selected, pressed, scale]);
+  const inner = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+  const gallery = layout === "gallery";
+  const dim = item.availabilityStatus === "available" ? 1 : 0.5;
+  const heart = selecting ? <SelectCheck selected={selected} /> : (
+    <View style={{ position: "absolute", top: 4, right: 4 }}>
+      <GlassButton
+        icon={favorite ? "heart.fill" : "heart"}
+        label={favorite ? "Remove from favorites" : "Add to favorites"}
+        selected={favorite}
+        size={36}
+        tintColor={favorite ? adaptiveColors.destructive : adaptiveColors.label}
+        onPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          onFavorite(item.id);
         }}
-      >
-        <WardrobeIcon name="xmark" color={adaptiveColors.onAccent} size={15} weight="semibold" />
-        <Text style={{ fontSize: 14, lineHeight: 19, fontWeight: "700", color: adaptiveColors.onAccent }}>Clear all filters</Text>
-      </Pressable>
+      />
+    </View>
+  );
+
+  return (
+    <View style={{ width: width as number, flexGrow: 0, flexShrink: 0 }}>
+      <Animated.View style={inner}>
+        <Pressable
+          accessibilityLabel={`Open ${item.name}`}
+          onPress={() => onTap(item.id)}
+          onLongPress={() => onLong(item.id)}
+          delayLongPress={300}
+          onPressIn={() => setPressed(true)}
+          onPressOut={() => setPressed(false)}
+          style={gallery ? undefined : {
+            width: "100%",
+            paddingTop: cardImagePadding,
+            paddingHorizontal: cardImagePadding,
+            paddingBottom: 8,
+            borderRadius: 22,
+            borderCurve: "continuous",
+            overflow: "hidden",
+            backgroundColor: adaptiveColors.surface,
+            borderWidth: selected ? 2 : 1,
+            borderColor: selected ? adaptiveColors.accent : adaptiveColors.border,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.045)",
+          }}
+        >
+          <View style={{ position: "relative" }}>
+            <ItemImage
+              imageUrl={item.displayAssetUri}
+              label={item.name}
+              style={gallery
+                ? { aspectRatio: 1, borderRadius: 8, opacity: dim, ...(selected ? { borderWidth: 3, borderColor: adaptiveColors.accent } : null) }
+                : { width: "100%", aspectRatio: 1, borderRadius: 12, opacity: dim }}
+            />
+            <StatusPill status={item.availabilityStatus} />
+            {heart}
+            {gallery ? (
+              <View style={{ position: "absolute", left: 4, bottom: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.55)" }}>
+                <Text style={{ fontSize: 9, fontWeight: "800", color: "#FFF", fontVariant: ["tabular-nums"] }}>
+                  {item.wearCount === 0 ? "Unworn" : costPerWearOf(item) == null ? `${item.wearCount}×` : `${formatCostPerWear(item)}/wear`}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+          {gallery ? null : (
+            <View style={{ minHeight: 48, paddingHorizontal: 4, paddingTop: 10, justifyContent: "center", gap: 2 }}>
+              <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 17, fontWeight: "700", includeFontPadding: false, color: adaptiveColors.label, letterSpacing: -0.1 }}>{item.name}</Text>
+              <Text numberOfLines={1} style={{ fontSize: 11, lineHeight: 15, fontWeight: "500", includeFontPadding: false, color: adaptiveColors.secondaryLabel, fontVariant: ["tabular-nums"] }}>{wearLine(item)}</Text>
+            </View>
+          )}
+        </Pressable>
+      </Animated.View>
+    </View>
+  );
+});
+
+function SelectCheck({ selected }: { selected: boolean }) {
+  return (
+    <View
+      pointerEvents="none"
+      style={{ position: "absolute", top: 6, right: 6, width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.78)", borderWidth: 1.5, borderColor: "rgba(0,0,0,0.25)" }}
+    >
+      {selected ? (
+        <Animated.View
+          entering={FadeIn.duration(100)}
+          exiting={FadeOut.duration(80)}
+          style={{ position: "absolute", top: -1.5, left: -1.5, width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: adaptiveColors.accent }}
+        >
+          <WardrobeIcon name="checkmark" color={adaptiveColors.onAccent} size={14} weight="bold" />
+        </Animated.View>
+      ) : null}
     </View>
   );
 }
 
-function findWardrobeGaps(items: { category: ClothingCategory }[]): ClothingCategory[] {
-  const idealCounts: Record<ClothingCategory, number> = {
-    top: 6,
-    bottom: 4,
-    outerwear: 3,
-    shoes: 3,
-    accessory: 4,
-  };
-  const currentCounts: Record<ClothingCategory, number> = { top: 0, bottom: 0, outerwear: 0, shoes: 0, accessory: 0 };
-  items.forEach((item) => {
-    currentCounts[item.category]++;
-  });
-
-  return (Object.keys(idealCounts) as ClothingCategory[]).filter((cat) => currentCounts[cat] < idealCounts[cat] * 0.6);
+/** Small tag for pieces that aren't ready to wear (laundry, packed…). */
+function StatusPill({ status }: { status: Item["availabilityStatus"] }) {
+  if (status === "available") return null;
+  return (
+    <View pointerEvents="none" style={{ position: "absolute", top: 6, left: 6, paddingHorizontal: 7, paddingVertical: 3, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.6)" }}>
+      <Text style={{ fontSize: 10, fontWeight: "800", color: "#FFF" }}>{availabilityLabels[status]}</Text>
+    </View>
+  );
 }
+
+function BulkAction({ icon, label, onPress, disabled, destructive }: { icon: SymbolName; label: string; onPress: () => void; disabled?: boolean; destructive?: boolean }) {
+  const color = destructive ? adaptiveColors.destructive : adaptiveColors.label;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      disabled={disabled}
+      onPress={onPress}
+      style={{ flex: 1, minHeight: 52, borderRadius: 18, borderCurve: "continuous", alignItems: "center", justifyContent: "center", gap: 3, opacity: disabled ? 0.35 : 1, backgroundColor: adaptiveColors.surfaceMuted }}
+    >
+      <WardrobeIcon name={icon} color={color} size={18} />
+      <Text style={{ fontSize: 11, fontWeight: "700", color }}>{label}</Text>
+    </Pressable>
+  );
+}
+

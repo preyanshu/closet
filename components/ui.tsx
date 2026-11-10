@@ -10,6 +10,7 @@ import {
   Picker as ExpoPicker,
   Switch as ExpoSwitch,
 } from "@expo/ui";
+import { tint as swiftTint } from "@expo/ui/swift-ui/modifiers";
 import { BlurView } from "expo-blur";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import { router } from "expo-router";
@@ -19,6 +20,8 @@ import { SymbolView } from "expo-symbols";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, type ComponentProps, type PropsWithChildren, type ReactNode } from "react";
 import {
+  ActivityIndicator,
+  Platform,
   Pressable,
   Modal,
   ScrollView,
@@ -93,17 +96,20 @@ export function GlassLayer({ tintColor }: { tintColor?: ColorValue }) {
 export function Screen({
   children,
   scroll = true,
+  modal = false,
   contentContainerStyle,
-}: PropsWithChildren<{ scroll?: boolean; contentContainerStyle?: StyleProp<ViewStyle> }>) {
+}: PropsWithChildren<{ scroll?: boolean; /** A sheet screen: starts below its own header area, with no status-bar inset. */ modal?: boolean; contentContainerStyle?: StyleProp<ViewStyle> }>) {
   const { colors } = useWardrobeTheme();
+  const insets = useSafeAreaInsets();
 
   if (!scroll) return <View style={{ flex: 1, backgroundColor: colors.canvas }}>{children}</View>;
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      {/* The status bar / Dynamic Island inset is applied explicitly: the automatic adjustment is not reliable here. */}
       <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={[{ gap: spacing.xl, paddingHorizontal: spacing.lg, paddingBottom: 160, paddingTop: spacing.xl }, contentContainerStyle]}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={[{ gap: spacing.xl, paddingHorizontal: spacing.lg, paddingBottom: 160, paddingTop: modal ? spacing.lg : insets.top + spacing.xl }, contentContainerStyle]}
       >
         {children}
       </ScrollView>
@@ -302,8 +308,8 @@ export function ModalHeader({ title, subtitle, onClose }: { title: string; subti
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
       <View style={{ flex: 1, gap: spacing.xxs }}>
-        <Text accessibilityRole="header" style={{ ...typeScale.sectionTitle, color: colors.label }}>{title}</Text>
-        {subtitle ? <Text style={{ ...typeScale.callout, fontWeight: "400", color: colors.secondaryLabel }}>{subtitle}</Text> : null}
+        <Text accessibilityRole="header" style={{ fontSize: 28, lineHeight: 33, fontWeight: "800", letterSpacing: -1, color: colors.label }}>{title}</Text>
+        {subtitle ? <Text style={{ fontSize: 13, fontWeight: "600", color: colors.secondaryLabel }}>{subtitle}</Text> : null}
       </View>
       <CircularGlassButton icon="xmark" label={`Close ${title.toLowerCase()}`} onPress={onClose ?? (() => router.back())} />
     </View>
@@ -314,7 +320,8 @@ export function ModalHeader({ title, subtitle, onClose }: { title: string; subti
 // NOTE: `style` must stay an object, not a function. NativeWind's native interop
 // (react-native-css-interop/native-interop) spreads inline styles with `{ ...style }`
 // to build its own props, which turns a function into `{}` and drops every style.
-export function FilterChip({ label, count, selected, onPress }: { label: string; count?: number; selected: boolean; onPress: () => void }) {
+/** `fill` makes the chip share the row equally (for a fixed set of options that must fit on one line). */
+export function FilterChip({ label, count, selected, onPress, fill = false }: { label: string; count?: number; selected: boolean; onPress: () => void; fill?: boolean }) {
   const { colors } = useWardrobeTheme();
   const [pressed, setPressed] = useState(false);
   return (
@@ -326,10 +333,12 @@ export function FilterChip({ label, count, selected, onPress }: { label: string;
       onPress={() => { if (process.env.EXPO_OS === "ios") void Haptics.selectionAsync(); onPress(); }}
       style={{
         minHeight: 44,
-        paddingHorizontal: 14,
+        paddingHorizontal: fill ? 4 : 14,
         borderRadius: radius.pill,
         flexDirection: "row",
         alignItems: "center",
+        justifyContent: fill ? "center" : undefined,
+        flex: fill ? 1 : undefined,
         gap: 6,
         backgroundColor: selected ? colors.label : colors.surface,
         borderWidth: 1,
@@ -337,7 +346,7 @@ export function FilterChip({ label, count, selected, onPress }: { label: string;
         transform: [{ scale: pressed ? motion.pressScale : 1 }],
       }}
     >
-      <Text style={{ ...typeScale.callout, fontWeight: "700", color: selected ? colors.onAccent : colors.secondaryLabel }}>{label}</Text>
+      <Text numberOfLines={1} adjustsFontSizeToFit={fill} minimumFontScale={0.8} style={{ ...typeScale.callout, fontWeight: "700", color: selected ? colors.onAccent : colors.secondaryLabel }}>{label}</Text>
       {count !== undefined ? <Text style={{ ...typeScale.caption, ...typeScale.numeric, color: selected ? colors.onAccent : colors.tertiaryLabel, opacity: selected ? 0.7 : 1 }}>{count}</Text> : null}
     </Pressable>
   );
@@ -378,7 +387,11 @@ export function ToolbarButton({ icon, label, accessibilityLabel, selected = fals
   );
 }
 
-export function Button({ children, onPress, icon, variant = "primary", disabled, style, ...props }: PropsWithChildren<PressableProps & { icon?: SymbolName; variant?: "primary" | "secondary" | "destructive" }>) {
+/**
+ * The one button. A pill: solid black for the main action, outlined for the quieter one, red for removing.
+ * `regular` (52) fills a screen's bottom or a form; `compact` (44) sits inside content.
+ */
+export function Button({ children, onPress, icon, variant = "primary", size = "regular", loading = false, disabled, style, ...props }: PropsWithChildren<PressableProps & { icon?: SymbolName; variant?: "primary" | "secondary" | "destructive"; size?: "regular" | "compact"; loading?: boolean }>) {
   const { colors } = useWardrobeTheme();
   const [pressed, setPressed] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -393,9 +406,9 @@ export function Button({ children, onPress, icon, variant = "primary", disabled,
   return (
     <Pressable
       {...props}
-      disabled={disabled}
+      disabled={disabled || loading}
       accessibilityRole="button"
-      accessibilityState={{ disabled: Boolean(disabled) }}
+      accessibilityState={{ disabled: Boolean(disabled || loading), busy: loading }}
       onPressIn={() => setPressed(true)}
       onPressOut={() => setPressed(false)}
       onHoverIn={() => setHovered(true)}
@@ -406,26 +419,24 @@ export function Button({ children, onPress, icon, variant = "primary", disabled,
       }}
       style={[
         {
-          minHeight: control.button,
+          minHeight: size === "compact" ? 44 : 52,
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "center",
           gap: control.labelGap,
-          borderRadius: radius.md,
-          borderCurve: "continuous",
-          paddingHorizontal: spacing.lg,
-          paddingVertical: 13,
+          borderRadius: radius.pill,
+          paddingHorizontal: size === "compact" ? spacing.lg : spacing.xl,
+          paddingVertical: 10,
           backgroundColor,
           borderWidth: primary || destructive ? 0 : 1,
           borderColor: colors.border,
-          boxShadow: primary || destructive ? elevation.low : undefined,
           opacity: disabled ? 0.45 : pressed ? 0.78 : 1,
           transform: [{ scale: pressed ? motion.pressScale : 1 }],
         },
         resolvedStyle,
       ]}
     >
-      {icon ? <WardrobeIcon name={icon} color={foreground} size={iconSize.md} /> : null}
+      {loading ? <ActivityIndicator size="small" color={foreground} /> : icon ? <WardrobeIcon name={icon} color={foreground} size={iconSize.md} /> : null}
       <Text style={{ ...typeScale.button, flexShrink: 1, fontSize: 15, color: foreground, includeFontPadding: false, textAlignVertical: "center", textAlign: "center" }}>{children}</Text>
     </Pressable>
   );
@@ -435,7 +446,7 @@ export function NativeSwitch({ value, onValueChange, label, disabled }: { value:
   const { colors } = useWardrobeTheme();
   return (
     <ExpoHost matchContents seedColor={colors.accent}>
-      <ExpoSwitch value={value} onValueChange={onValueChange} label={label} disabled={disabled} />
+      <ExpoSwitch value={value} onValueChange={onValueChange} label={label} disabled={disabled} modifiers={Platform.OS === "ios" ? [swiftTint(colors.label)] : undefined} />
     </ExpoHost>
   );
 }
@@ -525,15 +536,21 @@ export function SelectionRow({ title, subtitle, selected, onPress, icon }: { tit
   );
 }
 
-export function EmptyState({ icon = "rectangle.on.rectangle.slash", title, message, action }: { icon?: SymbolName; title: string; message: string; action?: ReactNode }) {
+/**
+ * Every empty screen looks like the Closet's: a quiet icon, a title, one plain sentence and one
+ * regular-size pill button, centred with generous space.
+ */
+export function EmptyState({ icon = "tshirt", title, message, action }: { icon?: SymbolName; title: string; message?: string; action?: ReactNode }) {
   const { colors } = useWardrobeTheme();
   return (
-    <View style={{ alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.xxl, paddingVertical: spacing.xxxl }}>
-      <View style={{ width: 64, height: 64, borderRadius: radius.lg + spacing.xs, borderCurve: "continuous", alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceMuted }}>
-        <WardrobeIcon name={icon} color={colors.secondaryLabel} size={28} />
+    <View style={{ justifyContent: "center", alignItems: "center", paddingVertical: spacing.xxxl, gap: spacing.xl }}>
+      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={{ alignItems: "center", justifyContent: "center", padding: spacing.sm }}>
+        <WardrobeIcon name={icon} color={colors.tertiaryLabel} size={32} />
       </View>
-      <Text style={{ ...typeScale.sectionTitle, color: colors.label, textAlign: "center" }}>{title}</Text>
-      <Text style={{ ...typeScale.callout, color: colors.secondaryLabel, textAlign: "center" }}>{message}</Text>
+      <View style={{ gap: spacing.sm, alignItems: "center", maxWidth: 300 }}>
+        <Text accessibilityRole="header" style={{ fontSize: 22, fontWeight: "600", letterSpacing: -0.5, color: colors.label, textAlign: "center" }}>{title}</Text>
+        {message ? <Text style={{ fontSize: 14, lineHeight: 21, color: colors.secondaryLabel, textAlign: "center" }}>{message}</Text> : null}
+      </View>
       {action}
     </View>
   );
@@ -576,15 +593,30 @@ export function OutfitPreviewCard({ title, subtitle, items, saved, badge, compac
   );
 }
 
-export function SectionHeader({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: string }) {
+/**
+ * The header every tab page opens with: a small uppercase eyebrow, a large title, an optional
+ * one-line subtitle, and optional controls on the right. One definition so all pages match.
+ */
+export function PageHeader({ eyebrow, title, subtitle, right }: { eyebrow?: string; title: string; subtitle?: string; right?: ReactNode }) {
   const { colors } = useWardrobeTheme();
   return (
-    <View style={{ gap: spacing.md }}>
-      <View style={{ gap: spacing.xs }}>
-        {eyebrow ? <Text style={{ ...typeScale.eyebrow, color: colors.secondaryLabel }}>{eyebrow}</Text> : null}
-        <Text style={{ ...typeScale.title, color: colors.label }}>{title}</Text>
+    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+      <View style={{ gap: 3, flex: 1 }}>
+        {eyebrow ? <Text style={{ fontSize: 11, fontWeight: "800", letterSpacing: 2, color: colors.secondaryLabel, textTransform: "uppercase" }}>{eyebrow}</Text> : null}
+        <Text style={{ fontSize: 36, fontWeight: "800", letterSpacing: -1.4, color: colors.label, lineHeight: 40 }}>{title}</Text>
+        {subtitle ? <Text style={{ fontSize: 13, fontWeight: "600", color: colors.secondaryLabel }}>{subtitle}</Text> : null}
       </View>
-      {action ? <Text style={{ ...typeScale.callout, color: colors.secondaryLabel }}>{action}</Text> : null}
+      {right ? <View style={{ marginTop: 4 }}>{right}</View> : null}
     </View>
   );
+}
+
+/** A heading for a section inside a page. */
+export function SectionTitle({ children }: { children: ReactNode }) {
+  const { colors } = useWardrobeTheme();
+  return <Text style={{ fontSize: 19, lineHeight: 24, fontWeight: "700", letterSpacing: -0.4, color: colors.label }}>{children}</Text>;
+}
+
+export function SectionHeader({ eyebrow, title }: { eyebrow?: string; title: string; action?: string }) {
+  return <PageHeader eyebrow={eyebrow} title={title} />;
 }

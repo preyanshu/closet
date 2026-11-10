@@ -17,6 +17,13 @@ type Env = {
   STAGE_MODEL?: string;
   STYLE_MODEL?: string;
   DECIDE_MODEL?: string;
+  /** When both are set, every /v1 call must carry a valid Supabase session token. */
+  SUPABASE_URL?: string;
+  SUPABASE_ANON_KEY?: string;
+  /** RevenueCat secret API key (server only). When set, callers must hold an active entitlement. */
+  REVENUECAT_SECRET_KEY?: string;
+  /** The entitlement that unlocks the app (default "pro"). */
+  REVENUECAT_ENTITLEMENT?: string;
 };
 
 /**
@@ -66,6 +73,54 @@ const DEFAULT_STAGING_PROMPT = `Professional e-commerce product photography of O
 const app = new Hono<{ Bindings: Env }>();
 
 app.use("*", cors({ origin: "*", allowMethods: ["GET", "POST", "OPTIONS"] }));
+
+// Only signed-in subscribers may call the AI endpoints. The token is checked with Supabase and the
+// account's RevenueCat entitlement is checked with RevenueCat; both results are remembered for a few
+// minutes so a chat session isn't a lookup per turn.
+const verifiedTokens = new Map<string, { userId: string; expires: number }>();
+const entitled = new Map<string, number>();
+const TOKEN_TTL_MS = 5 * 60 * 1000;
+const ENTITLEMENT_TTL_MS = 2 * 60 * 1000;
+
+async function hasEntitlement(env: Env, userId: string): Promise<boolean> {
+  const secret = env.REVENUECAT_SECRET_KEY;
+  if (!secret) return true; // not configured (local development)
+  const cached = entitled.get(userId);
+  if (cached && cached > Date.now()) return true;
+  const response = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`, { headers: { Authorization: `Bearer ${secret}` } });
+  if (!response.ok) return false;
+  const body = (await response.json()) as { subscriber?: { entitlements?: Record<string, { expires_date: string | null }> } };
+  const entitlement = body.subscriber?.entitlements?.[env.REVENUECAT_ENTITLEMENT ?? "pro"];
+  // A null expiry is a lifetime purchase.
+  const active = Boolean(entitlement) && (entitlement!.expires_date === null || new Date(entitlement!.expires_date).getTime() > Date.now());
+  if (active) {
+    if (entitled.size > 500) entitled.clear();
+    entitled.set(userId, Date.now() + ENTITLEMENT_TTL_MS);
+  }
+  return active;
+}
+
+app.use("/v1/*", async (c, next) => {
+  const baseUrl = c.env.SUPABASE_URL;
+  const anonKey = c.env.SUPABASE_ANON_KEY;
+  if (!baseUrl || !anonKey) return next(); // not configured (local development)
+  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  if (!token) return c.json({ error: "unauthorized" }, 401);
+
+  let session = verifiedTokens.get(token);
+  if (!session || session.expires < Date.now()) {
+    const response = await fetch(`${baseUrl}/auth/v1/user`, { headers: { Authorization: `Bearer ${token}`, apikey: anonKey } });
+    if (!response.ok) return c.json({ error: "unauthorized" }, 401);
+    const user = (await response.json()) as { id?: string };
+    if (!user.id) return c.json({ error: "unauthorized" }, 401);
+    if (verifiedTokens.size > 500) verifiedTokens.clear();
+    session = { userId: user.id, expires: Date.now() + TOKEN_TTL_MS };
+    verifiedTokens.set(token, session);
+  }
+
+  if (!(await hasEntitlement(c.env, session.userId))) return c.json({ error: "subscription_required" }, 402);
+  return next();
+});
 
 app.get("/health", (c) => c.json({ ok: true, credentials: Boolean(credentials(c.env)) }));
 

@@ -1,109 +1,157 @@
-import { adaptiveColors, radius, Avatar, Card, GlassButton, Screen, SectionHeader } from "@/components/ui";
+import { adaptiveColors, radius, spacing, FilterChip, PageHeader, Screen, SectionTitle } from "@/components/ui";
+import { displayName } from "@/services/display-name";
+import { PRIVACY_URL, TERMS_URL } from "@/services/config";
+import { vibesFor } from "@/services/vibes";
+import { useAuth } from "@/state/auth-context";
 import { useCloset } from "@/state/closet-context";
-import { WEARER_PRESENTATIONS } from "@/types/domain";
-import { SymbolView } from "expo-symbols";
+import { useSubscription } from "@/state/subscription-context";
+import { WEARER_PRESENTATIONS, type WearerPresentation } from "@/types/domain";
+import Constants from "expo-constants";
 import * as Haptics from "expo-haptics";
-import { router } from "expo-router";
-import { Pressable, Text, View } from "react-native";
+import { SymbolView } from "expo-symbols";
+import { type ReactNode } from "react";
+import { Linking, Pressable, Text, View } from "react-native";
 
-const settingsGroups = [
-  {
-    title: "Preferences",
-    rows: [
-      { id: "style-quiz", label: "Edit Style Preferences", icon: "sparkles" as const, action: "push" as const, route: "/style-quiz" },
-      { id: "measurements", label: "Measurements & Avatar", icon: "person.crop.circle" as const, action: "info" as const },
-      { id: "notifications", label: "Notifications", icon: "bell" as const, action: "info" as const },
-    ],
-  },
-  {
-    title: "Account",
-    rows: [
-      { id: "retailers", label: "Connected retailers", icon: "bag" as const, action: "info" as const },
-      { id: "privacy", label: "Privacy", icon: "lock.shield" as const, action: "info" as const },
-      { id: "about", label: "About Alta MVP", icon: "info.circle" as const, action: "info" as const },
-    ],
-  },
-];
+const WEARER_LABEL: Record<WearerPresentation, string> = { male: "Menswear", female: "Womenswear", unspecified: "Everything" };
+const MANAGE_SUBSCRIPTION_URL = "https://apps.apple.com/account/subscriptions";
+
+const initialsOf = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "A";
 
 export default function ProfileScreen() {
-  const { stylePreferences, profile, updateProfile } = useCloset();
+  const { items, myLooks, savedLooks, profile, updateProfile, stylePreferences, setStylePreferences } = useCloset();
+  const { user, signOut } = useAuth();
+  const { status: subscription, bypassed } = useSubscription();
+
+  const email = user?.email ?? undefined;
+  const name = displayName(user?.user_metadata?.full_name as string | undefined, email) || "Your account";
+  const presentation = profile.presentation ?? "male";
+  const vibes = vibesFor(presentation);
+  // Vibes picked under another wearer setting are kept but not shown here.
+  const shownVibeIds = new Set(vibes.map((vibe) => vibe.id));
+
+  const pieces = items.length;
+  const looks = myLooks.length + savedLooks.length;
+  const wears = items.reduce((total, item) => total + item.wearCount, 0);
+  const pro = subscription === "active" && !bypassed;
+
 
   return (
-    <Screen>
-      <SectionHeader eyebrow="Profile" title="Your account" />
+    <Screen contentContainerStyle={{ gap: spacing.xl }}>
+      <PageHeader eyebrow="Account" title="Profile" />
 
-      <Card className="flex-row items-center gap-4">
-        <Avatar initials="PW" />
-        <View className="flex-1 gap-1">
-          <Text className="text-xl font-bold text-black dark:text-[#FFF9ED]">Preyanshu</Text>
-          <Text className="text-sm text-black/58 dark:text-white/58">{stylePreferences.length} styles selected</Text>
+      {/* Who */}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+        <View style={{ width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center", backgroundColor: adaptiveColors.label }}>
+          <Text style={{ fontSize: 22, fontWeight: "800", color: adaptiveColors.onAccent }}>{initialsOf(name)}</Text>
         </View>
-        <GlassButton icon="pencil" label="Edit profile" size={36} onPress={() => {}} />
-      </Card>
-
-      {stylePreferences.length > 0 && (
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-          {stylePreferences.map((pref) => (
-            <View key={pref} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.pill, backgroundColor: adaptiveColors.label }}>
-              <Text style={{ fontSize: 12, fontWeight: "600", color: adaptiveColors.onAccent, textTransform: "capitalize" }}>{pref}</Text>
+        <View style={{ flex: 1, gap: 3 }}>
+          <Text numberOfLines={1} style={{ fontSize: 24, lineHeight: 29, fontWeight: "800", letterSpacing: -0.7, color: adaptiveColors.label }}>{name}</Text>
+          {email ? <Text numberOfLines={1} style={{ fontSize: 14, color: adaptiveColors.secondaryLabel }}>{email}</Text> : null}
+          {pro ? (
+            <View style={{ alignSelf: "flex-start", marginTop: 2, paddingHorizontal: 9, paddingVertical: 3, borderRadius: radius.pill, backgroundColor: adaptiveColors.accentSoft }}>
+              <Text style={{ fontSize: 11, fontWeight: "800", letterSpacing: 0.4, color: adaptiveColors.accent }}>ALTA PRO</Text>
             </View>
-          ))}
+          ) : null}
         </View>
-      )}
+      </View>
 
-      <Card className="gap-3">
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <View style={{ flex: 1, gap: 3 }}>
-            <Text style={{ fontSize: 12, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5 }}>Styled for</Text>
-            <Text style={{ fontSize: 13, color: adaptiveColors.secondaryLabel }}>Tailors AI looks to this presentation.</Text>
-          </View>
-          <View style={{ flexDirection: "row", gap: 6 }}>
-            {WEARER_PRESENTATIONS.map((option) => {
-              const active = (profile.presentation ?? "male") === option;
-              return (
-                <Pressable
-                  key={option}
-                  onPress={() => {
-                    Haptics.selectionAsync();
-                    updateProfile({ ...profile, presentation: option });
-                  }}
-                  style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.pill, backgroundColor: active ? adaptiveColors.label : "rgba(0,0,0,0.05)" }}
-                >
-                  <Text style={{ fontSize: 11, fontWeight: "700", textTransform: "capitalize", color: active ? adaptiveColors.onAccent : adaptiveColors.secondaryLabel }}>{option === "unspecified" ? "Any" : option}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
-      </Card>
+      {/* Real numbers from the closet */}
+      <View style={{ flexDirection: "row", borderRadius: 20, borderCurve: "continuous", backgroundColor: adaptiveColors.surfaceRaised, borderWidth: 1, borderColor: adaptiveColors.border, paddingVertical: 16 }}>
+        <Stat value={pieces} label={pieces === 1 ? "Piece" : "Pieces"} />
+        <View style={{ width: 1, backgroundColor: adaptiveColors.separator }} />
+        <Stat value={looks} label={looks === 1 ? "Saved look" : "Saved looks"} />
+        <View style={{ width: 1, backgroundColor: adaptiveColors.separator }} />
+        <Stat value={wears} label={wears === 1 ? "Wear" : "Wears"} />
+      </View>
 
-      {settingsGroups.map((group) => (
-        <Card key={group.title} className="gap-1">
-          <Text style={{ fontSize: 12, fontWeight: "700", color: adaptiveColors.secondaryLabel, textTransform: "uppercase", letterSpacing: 1.5, paddingVertical: 8, paddingHorizontal: 4 }}>{group.title}</Text>
-          {group.rows.map((row) => (
-            <Pressable
-              key={row.id}
+      {/* The answers from onboarding, editable here */}
+      <Section title="Styled for" hint="Decides which vibes and looks Alta shows you.">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
+          {WEARER_PRESENTATIONS.map((option) => (
+            <FilterChip
+              key={option}
+              label={WEARER_LABEL[option]}
+              selected={presentation === option}
               onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                if ("route" in row && row.route) router.push(row.route as any);
+                if (presentation === option) return;
+                Haptics.selectionAsync();
+                updateProfile({ ...profile, presentation: option });
               }}
-              style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.06)" }}
-            >
-              <View style={{ width: 32, height: 32, borderRadius: radius.pill, backgroundColor: "rgba(0,0,0,0.04)", alignItems: "center", justifyContent: "center" }}>
-                <SymbolView name={row.icon} tintColor="rgba(0,0,0,0.4)" style={{ width: 16, height: 16 }} />
-              </View>
-              <Text style={{ flex: 1, fontSize: 15, fontWeight: "500", color: adaptiveColors.label }}>{row.label}</Text>
-              <SymbolView name="chevron.right" tintColor="rgba(0,0,0,0.25)" style={{ width: 16, height: 16 }} />
-            </Pressable>
+            />
           ))}
-        </Card>
-      ))}
+        </View>
+      </Section>
 
-      <Card>
-        <Text style={{ fontSize: 13, lineHeight: 20, color: adaptiveColors.secondaryLabel }}>
-          Scanned pieces are analyzed and staged with AI. Account sync and persistent cloud storage are not connected yet, so closet changes remain on this device session.
-        </Text>
-      </Card>
+      <Section title="Your vibes" hint="Alta leans into these when it styles you.">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
+          {vibes.map((vibe) => {
+            const selected = stylePreferences.includes(vibe.id);
+            return (
+              <FilterChip
+                key={vibe.id}
+                label={vibe.label}
+                selected={selected}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  const others = stylePreferences.filter((id) => !shownVibeIds.has(id));
+                  const current = stylePreferences.filter((id) => shownVibeIds.has(id));
+                  setStylePreferences([...others, ...(selected ? current.filter((id) => id !== vibe.id) : [...current, vibe.id])]);
+                }}
+              />
+            );
+          })}
+        </View>
+      </Section>
+
+      {/* Account */}
+      <Section title="Account">
+        <View style={{ borderRadius: 20, borderCurve: "continuous", backgroundColor: adaptiveColors.surfaceRaised, borderWidth: 1, borderColor: adaptiveColors.border, overflow: "hidden" }}>
+          {pro ? <Row label="Manage subscription" icon="chevron.right" onPress={() => void Linking.openURL(MANAGE_SUBSCRIPTION_URL)} /> : null}
+          {TERMS_URL ? <Row label="Terms of Service" icon="chevron.right" onPress={() => void Linking.openURL(TERMS_URL)} /> : null}
+          {PRIVACY_URL ? <Row label="Privacy Policy" icon="chevron.right" onPress={() => void Linking.openURL(PRIVACY_URL)} /> : null}
+          {user ? <Row label="Sign out" destructive last onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); void signOut(); }} /> : null}
+        </View>
+      </Section>
+
+      <Text style={{ textAlign: "center", fontSize: 12, color: adaptiveColors.tertiaryLabel }}>
+        Alta {Constants.expoConfig?.version ? `v${Constants.expoConfig.version}` : ""}
+      </Text>
     </Screen>
+  );
+}
+
+function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  return (
+    <View style={{ gap: spacing.sm }}>
+      <View style={{ gap: 2 }}>
+        <SectionTitle>{title}</SectionTitle>
+        {hint ? <Text style={{ fontSize: 13, fontWeight: "600", color: adaptiveColors.secondaryLabel }}>{hint}</Text> : null}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+function Stat({ value, label }: { value: number; label: string }) {
+  return (
+    <View style={{ flex: 1, alignItems: "center", gap: 2 }}>
+      <Text style={{ fontSize: 24, fontWeight: "800", letterSpacing: -0.5, color: adaptiveColors.label, fontVariant: ["tabular-nums"] }}>{value}</Text>
+      <Text style={{ fontSize: 12, fontWeight: "500", color: adaptiveColors.tertiaryLabel }}>{label}</Text>
+    </View>
+  );
+}
+
+function Row({ label, icon, destructive, last, onPress }: { label: string; icon?: "chevron.right"; destructive?: boolean; last?: boolean; onPress?: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole={onPress ? "button" : "text"}
+      disabled={!onPress}
+      onPress={onPress}
+      style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 52, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: last ? 0 : 1, borderBottomColor: adaptiveColors.separator }}
+    >
+      <Text style={{ fontSize: 15, fontWeight: "600", color: destructive ? adaptiveColors.destructive : adaptiveColors.label }}>{label}</Text>
+      <View style={{ flex: 1 }} />
+      {icon ? <SymbolView name={icon} tintColor={adaptiveColors.tertiaryLabel} style={{ width: 14, height: 14 }} /> : null}
+    </Pressable>
   );
 }

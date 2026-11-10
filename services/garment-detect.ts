@@ -2,7 +2,13 @@ import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import { File } from "expo-file-system";
 import type { ClothingCategory } from "@/data/mock";
 import { isWardrobeApiConfigured, runDecision, score1To5, WardrobeApiError } from "@/services/api/wardrobe-api";
-import type { AiAttribute, ItemRole, WarmthBand } from "@/types/domain";
+import { deriveAlternateRoles } from "@/services/item-roles";
+import {
+  CATEGORY_BY_ROLE, CATEGORY_VALUES, COLOR_VALUES, FIT_VALUES, PATTERN_VALUES, ROLE_BY_CATEGORY, ROLE_BY_SUBCATEGORY,
+  SLEEVE_VALUES, SUBCATEGORY_VALUES, TEXTURE_VALUES,
+} from "@/services/item-options";
+import { suggestAesthetics } from "@/services/vibes";
+import type { AiAttribute, ItemRole, WarmthBand, WearerPresentation } from "@/types/domain";
 
 /**
  * Bounded-attribute garment extraction on Clef-flash (multimodal decision
@@ -16,23 +22,6 @@ const MAX_INPUT = 768;
 /** At/above this confidence an attribute is stored as already confirmed. */
 export const AUTO_CONFIRM_THRESHOLD = 0.85;
 
-const CATEGORY_VALUES = ["top", "bottom", "outerwear", "shoes", "accessory"] as const;
-const COLOR_VALUES = [
-  "black", "white", "cream", "gray", "navy", "blue", "green",
-  "red", "pink", "brown", "beige", "tan", "camel", "yellow", "purple", "orange",
-] as const;
-const FIT_VALUES = ["slim", "regular", "relaxed", "oversized", "wide"] as const;
-const SLEEVE_VALUES = ["sleeveless", "short", "three-quarter", "long"] as const;
-const PATTERN_VALUES = ["solid", "striped", "plaid", "floral", "graphic", "other"] as const;
-const TEXTURE_VALUES = ["smooth", "knit", "denim", "woven", "fleece", "leather-like", "satin-like"] as const;
-const SUBCATEGORY_VALUES = [
-  "t-shirt", "shirt", "blouse", "polo", "tank top", "sweater", "knit", "hoodie", "sweatshirt", "dress", "jumpsuit",
-  "jeans", "trousers", "chinos", "skirt", "shorts", "leggings",
-  "coat", "jacket", "blazer", "cardigan", "vest", "puffer",
-  "sneaker", "boot", "loafer", "heel", "sandal", "flat", "dress shoe", "slipper",
-  "bag", "belt", "hat", "cap", "scarf", "sunglasses", "jewelry", "watch", "gloves", "socks", "other",
-] as const;
-
 const FORMALITY_BY_SCORE: Record<number, string> = { 1: "casual", 2: "casual", 3: "smart-casual", 4: "formal", 5: "formal" };
 const WARMTH_BY_SCORE: Record<number, WarmthBand> = { 1: "light", 2: "light", 3: "medium", 4: "heavy", 5: "heavy" };
 
@@ -42,33 +31,6 @@ const CATEGORY_NOUN: Record<ClothingCategory, string> = {
   outerwear: "jacket",
   shoes: "shoes",
   accessory: "accessory",
-};
-
-const ROLE_BY_CATEGORY: Record<ClothingCategory, ItemRole> = {
-  top: "base_top",
-  bottom: "bottom",
-  outerwear: "outer_layer",
-  shoes: "footwear",
-  accessory: "other",
-};
-
-/** Subcategory → styling role, so dresses/jumpsuits become one_piece and bags get their own role. */
-const ROLE_BY_SUBCATEGORY: Record<string, ItemRole> = {
-  "t-shirt": "base_top", shirt: "base_top", blouse: "base_top", polo: "base_top", "tank top": "base_top",
-  sweater: "base_top", knit: "base_top", hoodie: "base_top", sweatshirt: "base_top",
-  dress: "one_piece", jumpsuit: "one_piece",
-  jeans: "bottom", trousers: "bottom", chinos: "bottom", skirt: "bottom", shorts: "bottom", leggings: "bottom",
-  coat: "outer_layer", jacket: "outer_layer", blazer: "outer_layer", cardigan: "outer_layer", vest: "outer_layer", puffer: "outer_layer",
-  sneaker: "footwear", boot: "footwear", loafer: "footwear", heel: "footwear", sandal: "footwear", flat: "footwear", "dress shoe": "footwear", slipper: "footwear",
-  bag: "bag", belt: "belt", hat: "hat", cap: "hat", scarf: "scarf", sunglasses: "eyewear", jewelry: "jewelry", watch: "jewelry", gloves: "other", socks: "socks",
-};
-
-/** Role → category, used when the subcategory is more specific than the category answer. */
-const CATEGORY_BY_ROLE: Record<ItemRole, ClothingCategory> = {
-  base_top: "top", one_piece: "top", mid_layer: "outerwear", outer_layer: "outerwear",
-  bottom: "bottom", footwear: "shoes",
-  bag: "accessory", belt: "accessory", hat: "accessory", eyewear: "accessory",
-  jewelry: "accessory", socks: "accessory", scarf: "accessory", other: "accessory",
 };
 
 const MATERIAL_WORD: Record<string, string> = {
@@ -87,6 +49,8 @@ export type GarmentAttributes = {
   subcategory: string;
   /** Styling role derived from the subcategory (not model-reported). */
   role: ItemRole;
+  /** Other jobs the piece can do in a look, e.g. a shirt that can also be worn open as a layer. */
+  alternate_roles: ItemRole[];
   name: string;
   primary_color: string;
   secondary_colors: string[];
@@ -150,23 +114,7 @@ export function mapCategory(raw: string | undefined | null): ClothingCategory {
   return "top";
 }
 
-export function suggestAesthetics(attrs: Partial<GarmentAttributes>): string[] {
-  const tags = new Set<string>();
-  const haystack = [attrs.category, attrs.name, attrs.fit, attrs.pattern, attrs.sleeve_length, attrs.material, attrs.formality]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  if (/(office|blouse|trouser|shirt|blazer|loafer|suit|silk|charcoal|tailored)/.test(haystack)) tags.add("office");
-  if (/(oversized|hoodie|sneaker|graphic|street|cap|denim|puffer)/.test(haystack)) tags.add("streetwear");
-  if (/(knit|wool|camel|cashmere|coat|loafer|pearl|prep)/.test(haystack)) tags.add("old-money");
-  if (/(white|cream|ivory|clean|tank|linen|minimal)/.test(haystack)) tags.add("clean-girl");
-  if (/(silk|satin|slip|evening|black|dress|heel)/.test(haystack)) tags.add("evening");
-  if (/(minimal|solid|black|white|tailored|straight)/.test(haystack)) tags.add("minimal");
-
-  if (tags.size === 0) tags.add("minimal");
-  return [...tags];
-}
+export { suggestAesthetics };
 
 /** Build AiAttribute evidence rows from a detection result. */
 export function toAiAttributes(attrs: GarmentAttributes): AiAttribute[] {
@@ -295,7 +243,7 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
 
   if (!isWardrobeApiConfigured()) {
     log("ERROR: wardrobe API not configured");
-    throw new WardrobeApiError("Wardrobe API not configured (set EXPO_PUBLIC_WARDROBE_API_URL).");
+    throw new WardrobeApiError("Alta isn't available on this device right now.", "not_configured", "EXPO_PUBLIC_WARDROBE_API_URL is not set");
   }
 
   const dataUri = await prepareImageDataUri(uri);
@@ -313,6 +261,7 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
       texture: { type: "choice", instructions: "What is the visible surface texture?", criteria: Object.fromEntries(TEXTURE_VALUES.map((v) => [v, v])) },
       formality: { type: "score", instructions: "How dressy is this piece? 1 = very casual, 5 = formal.", criteria: ["1", "2", "3", "4", "5"] },
       warmth: { type: "score", instructions: "How warm is this piece? 1 = light/breathable, 5 = heavy/cold-weather.", criteria: ["1", "2", "3", "4", "5"] },
+      can_layer: { type: "choice", instructions: "Could this piece be worn open or over another top as a layer, like a button-up shirt, overshirt, open knit, cardigan, hoodie or vest? A t-shirt, tank, camisole, polo, or anything that is not a top is no.", criteria: { yes: "can be worn over another top as a layer", no: "worn on its own as a base, or not a top" } },
     },
     [dataUri],
   );
@@ -327,6 +276,7 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
   const textureAnswer = choiceAnswer(answers, "texture");
   const formalityAnswer = scoreAnswer(answers, "formality");
   const warmthAnswer = scoreAnswer(answers, "warmth");
+  const layerAnswer = choiceAnswer(answers, "can_layer");
 
   const confidences: Record<string, number> = {
     category: categoryAnswer?.confidence ?? 0,
@@ -354,11 +304,20 @@ export async function detectGarment(uri: string): Promise<GarmentAttributes> {
   const pattern = patternAnswer?.choice ?? "solid";
   const material = textureAnswer?.choice ?? "";
 
+  const name = templateName(primaryColor, fit, material, subcategory, category);
+  const alternateRoles = deriveAlternateRoles({
+    role,
+    subcategory,
+    name,
+    canLayer: layerAnswer ? { answer: layerAnswer.choice === "yes", confidence: layerAnswer.confidence } : undefined,
+  });
+
   const attrs: GarmentAttributes = {
     category,
     subcategory,
     role,
-    name: templateName(primaryColor, fit, material, subcategory, category),
+    alternate_roles: alternateRoles,
+    name,
     primary_color: primaryColor,
     secondary_colors: secondaryColors,
     fit,

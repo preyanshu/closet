@@ -1,108 +1,133 @@
-import { adaptiveColors, Card, FilterChip, GlassButton, GlassLayer, Screen, spacing, WardrobeIcon } from "@/components/ui";
+import { adaptiveColors, Button, EmptyState, FilterChip, PageHeader, Screen, SectionTitle, spacing } from "@/components/ui";
 import { type Item } from "@/data/mock";
+import { ErrorNotice } from "@/components/error-notice";
 import { itemImageSource } from "@/services/item-image";
+import { canComposeOutfit, isEligible } from "@/services/outfit-engine";
+import { homeChipVibes } from "@/services/vibes";
+import { displayName, firstName } from "@/services/display-name";
+import { useAuth } from "@/state/auth-context";
 import { useCloset } from "@/state/closet-context";
 import { useDailyLooks } from "@/state/use-daily-looks";
+import { useWeather } from "@/state/use-weather";
 import * as Haptics from "expo-haptics";
 import { SymbolView } from "expo-symbols";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import { useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { useMemo, useState, type ReactNode } from "react";
+import { ActivityIndicator, Pressable, ScrollView, Text, View, type PressableProps, type ViewStyle } from "react-native";
 
-const quickAestheticIds = ["all", "minimal", "clean-girl", "old-money", "office"];
-const quickAestheticLabels = ["All", "Minimal", "Clean girl", "Old money", "Office"];
+
+/** Pressable with an object style (NativeWind drops function styles) and a pressed fade. */
+function Tap({ style, children, ...rest }: { style: ViewStyle; children: ReactNode } & Omit<PressableProps, "style" | "children">) {
+  const [pressed, setPressed] = useState(false);
+  return (
+    <Pressable
+      {...rest}
+      onPressIn={(e) => { setPressed(true); rest.onPressIn?.(e); }}
+      onPressOut={(e) => { setPressed(false); rest.onPressOut?.(e); }}
+      style={{ ...style, opacity: rest.disabled ? 0.5 : pressed ? 0.65 : 1 }}
+    >
+      {children}
+    </Pressable>
+  );
+}
 
 export default function HomeScreen() {
   const [selectedAestheticId, setSelectedAestheticId] = useState<string>("all");
-  const { items, isSavedLook, toggleSavedLook } = useCloset();
-  const { looks: outfits, status, error, refresh, refreshing, suggestions } = useDailyLooks({ aestheticId: selectedAestheticId, count: 3 });
+  const { items, isSavedLook, toggleSavedLook, setAddedMessage, stylePreferences, profile } = useCloset();
+  const canStyle = useMemo(() => canComposeOutfit(items), [items]);
+  const { looks: allLooks, status, error, errorKind, refresh, refreshing, generatingVibe, generateFor, toggleDislike, isDisliked } = useDailyLooks();
+  // Chips are filters over the one daily pool, by the vibes the stylist labelled each look with.
+  // The set is the generic chips + the user's quiz picks + whatever vibes today's looks carry,
+  // limited to vibes that suit the wearer.
+  const chips = useMemo(
+    () => homeChipVibes({ presentation: profile.presentation, preferred: stylePreferences, inPool: allLooks.flatMap((look) => look.metadata?.vibes ?? []) }),
+    [profile.presentation, stylePreferences, allLooks],
+  );
+  const activeVibe = selectedAestheticId === "all" || chips.some((chip) => chip.id === selectedAestheticId) ? selectedAestheticId : "all";
+  const outfits = useMemo(
+    () => (activeVibe === "all" ? allLooks : allLooks.filter((look) => look.metadata?.vibes?.includes(activeVibe))),
+    [allLooks, activeVibe],
+  );
+  const selectedLabel = chips.find((chip) => chip.id === activeVibe)?.label ?? "";
 
   return (
-    <Screen>
-      <View className="gap-6">
-        <HomeHeader />
-        <AskCard />
+    <Screen contentContainerStyle={{ gap: spacing.lg }}>
+      <HomeHeader />
+      <AskPill />
+
+      <View style={{ gap: 14, marginTop: 6 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <SectionTitle>Today&apos;s looks</SectionTitle>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <IconButton
+              label="Refresh looks"
+              disabled={refreshing}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                refresh();
+              }}
+            >
+              {refreshing
+                ? <ActivityIndicator size="small" color={adaptiveColors.secondaryLabel} />
+                : <SymbolView name="arrow.clockwise" tintColor={adaptiveColors.secondaryLabel} style={{ width: 14, height: 14 }} />}
+            </IconButton>
+            <IconButton label="My outfits" onPress={() => router.push("/outfits")}>
+              <SymbolView name="square.stack" tintColor={adaptiveColors.secondaryLabel} style={{ width: 14, height: 14 }} />
+            </IconButton>
+          </View>
+        </View>
 
         <View style={{ marginHorizontal: -spacing.lg }}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.xs, paddingHorizontal: spacing.lg, paddingVertical: 2 }}>
-            {quickAestheticIds.map((value, index) => (
-              <FilterChip key={value} label={quickAestheticLabels[index]} selected={selectedAestheticId === value} onPress={() => setSelectedAestheticId(value)} />
+            <FilterChip label="All" selected={activeVibe === "all"} onPress={() => setSelectedAestheticId("all")} />
+            {chips.map((chip) => (
+              <FilterChip key={chip.id} label={chip.label} selected={activeVibe === chip.id} onPress={() => setSelectedAestheticId(chip.id)} />
             ))}
           </ScrollView>
         </View>
       </View>
 
-      <View className="gap-4">
-        <View className="flex-row items-center justify-between">
-          <Text className="text-xs font-bold uppercase tracking-[2px] text-black/40 dark:text-white/40">Alta looks</Text>
-          <View className="flex-row items-center gap-2">
-            <Pressable
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                refresh();
-              }}
-              disabled={refreshing}
-              className="flex-row items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/[0.04] active:scale-[0.96]"
-            >
-              {refreshing
-                ? <ActivityIndicator size="small" color="rgba(0,0,0,0.4)" />
-                : <SymbolView name="arrow.clockwise" tintColor="rgba(0,0,0,0.45)" style={{ width: 13, height: 13 }} />}
-              <Text style={{ fontSize: 12, lineHeight: 16, fontWeight: "600", includeFontPadding: false, color: adaptiveColors.secondaryLabel }}>
-                {refreshing ? "Restyling" : "Refresh"}
-              </Text>
-            </Pressable>
-            <Pressable onPress={() => router.push("/outfits")} className="flex-row items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/[0.04]">
-              <WardrobeIcon name="heart" color={adaptiveColors.secondaryLabel} size={13} />
-              <Text style={{ fontSize: 12, lineHeight: 16, fontWeight: "600", includeFontPadding: false, color: adaptiveColors.secondaryLabel }}>Saved</Text>
-            </Pressable>
-          </View>
-        </View>
+      {error && status !== "loading" ? (
+        <ErrorNotice kind={errorKind} title={errorKind ? undefined : "Couldn't style your looks"} message={error} onRetry={refresh} retryLabel="Try again" busy={refreshing} />
+      ) : null}
 
-        {error && status !== "loading" && (
-          <View className="gap-2 rounded-[14px] bg-black/[0.04] px-4 py-3">
-            <Text className="text-xs font-semibold text-black/60 dark:text-white/60">{error}</Text>
-            <Pressable onPress={refresh} className="self-start rounded-full bg-black px-4 py-1.5 active:scale-[0.96]">
-              <Text className="text-[11px] font-bold text-white">Retry styling</Text>
-            </Pressable>
+      <View style={{ gap: 14 }}>
+        {status === "loading" && allLooks.length === 0 && (
+          <View style={{ alignItems: "center", gap: 12, paddingVertical: 40 }}>
+            <ActivityIndicator size="small" color={adaptiveColors.secondaryLabel} />
+            <Text style={{ fontSize: 13, color: adaptiveColors.tertiaryLabel }}>Alta is styling your day…</Text>
           </View>
         )}
-      </View>
-
-      <View className="gap-6">
-        {status === "loading" && outfits.length === 0 && (
-          <Card className="items-center gap-3 rounded-[18px] py-8">
-            <ActivityIndicator size="small" color="rgba(0,0,0,0.4)" />
-            <Text className="text-xs font-semibold text-black/45 dark:text-white/45">Alta is styling your day…</Text>
-          </Card>
-        )}
-        {status === "error" && outfits.length === 0 && !error && (
-          <Card className="items-center gap-3 rounded-[18px] py-8">
-            <Text className="text-xs font-semibold text-black/45 dark:text-white/45">Nothing to style yet — add a few pieces.</Text>
-          </Card>
+        {status === "error" && allLooks.length === 0 && !error && (
+          <Text style={{ textAlign: "center", paddingVertical: 40, fontSize: 13, color: adaptiveColors.tertiaryLabel }}>
+            Nothing to style yet. Add a few pieces to your closet.
+          </Text>
         )}
 
-        {status !== "loading" && outfits.length === 0 && suggestions.length > 0 && (
-          <Card className="gap-3 rounded-[18px] p-4">
-            <Text className="text-[17px] font-bold tracking-[-0.3px] text-black dark:text-[#FFF9ED]">Not quite enough to style yet</Text>
-            <Text className="text-xs font-medium text-black/45 dark:text-white/45">
-              Alta needs a few more pieces before she can build a full look. Add any of these:
-            </Text>
-            <View className="gap-2 pt-1">
-              {suggestions.map((suggestion) => (
-                <View key={suggestion.role} className="flex-row items-start gap-2">
-                  <SymbolView name="plus.circle" tintColor="rgba(0,0,0,0.35)" style={{ width: 15, height: 15, marginTop: 1 }} />
-                  <Text className="flex-1 text-xs font-semibold text-black/60 dark:text-white/60">
-                    {suggestion.label}
-                    <Text className="font-medium text-black/40 dark:text-white/40"> — {suggestion.hint}</Text>
-                  </Text>
-                </View>
-              ))}
-            </View>
-            <Pressable onPress={() => router.push("/scan")} className="mt-1 self-start rounded-full bg-black px-4 py-1.5 active:scale-[0.96]">
-              <Text className="text-[11px] font-bold text-white">Add clothes</Text>
-            </Pressable>
-          </Card>
+        {/* Not enough pieces yet. */}
+        {status !== "loading" && allLooks.length === 0 && !canStyle && (
+          <EmptyState
+            icon="tshirt"
+            title="Your outfit ideas will show up here"
+            message={items.length === 0 ? "Scan a few of your clothes and Alta will style your day." : "Add a few more pieces and Alta will style your day."}
+            action={<Button icon="camera" onPress={() => router.push("/scan")}>Scan clothes</Button>}
+          />
+        )}
+
+        {/* The closet can style but nothing has arrived yet. */}
+        {status !== "loading" && allLooks.length === 0 && canStyle && !error && (
+          <EmptyState icon="sparkles" title="Your outfit ideas are coming soon" message="Alta is putting today's looks together. They'll show up here." />
+        )}
+
+        {/* A chip with no matching looks today. */}
+        {allLooks.length > 0 && outfits.length === 0 && activeVibe !== "all" && (
+          <EmptyState
+            icon="sparkles"
+            title={`No ${selectedLabel} looks today`}
+            message={`Today's looks lean other ways. Alta can style a few ${selectedLabel.toLowerCase()} ones for you.`}
+            action={<Button icon="sparkles" loading={generatingVibe === activeVibe} disabled={generatingVibe !== null} onPress={() => generateFor(activeVibe)}>{generatingVibe === activeVibe ? "Styling…" : `Style ${selectedLabel} looks`}</Button>}
+          />
         )}
 
         {outfits.map((outfit) => {
@@ -113,106 +138,143 @@ export default function HomeScreen() {
           // were deleted); a real look needs at least two resolvable pieces.
           if (outfitItems.length < 2) return null;
           const saved = isSavedLook(outfit.id);
+          const disliked = isDisliked(outfit);
 
           return (
-            <Pressable
+            <Tap
               key={outfit.id}
               accessibilityRole="button"
               accessibilityLabel={`Open ${outfit.label}`}
               onPress={() => router.push({ pathname: "/look/[id]", params: { id: outfit.id, look: JSON.stringify(outfit) } })}
-              className="active:scale-[0.99]"
+              style={{
+                borderRadius: 20,
+                backgroundColor: adaptiveColors.surfaceRaised,
+                borderWidth: 1,
+                borderColor: adaptiveColors.border,
+                padding: 12,
+                gap: 12,
+              }}
             >
-              <Card className="gap-3 rounded-[18px] p-3">
-                <View className="gap-0.5 px-0.5">
-                  <Text className="text-[16px] font-bold tracking-[-0.2px] text-black dark:text-[#FFF9ED]">{outfit.label}</Text>
-                  <Text numberOfLines={2} className="text-[11px] font-medium leading-4 text-black/45 dark:text-white/45">{outfit.description}</Text>
+              <View style={{ gap: 12, opacity: disliked ? 0.45 : 1 }}>
+              <LookStrip items={outfitItems} />
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 2 }}>
+                <View style={{ flex: 1, gap: 2, opacity: disliked ? 0.45 : 1 }}>
+                  <Text numberOfLines={1} style={{ fontSize: 16, fontWeight: "700", letterSpacing: -0.2, color: adaptiveColors.label }}>{outfit.label}</Text>
+                  {outfit.description ? (
+                    <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: adaptiveColors.secondaryLabel }}>{outfit.description}</Text>
+                  ) : null}
                 </View>
-
-                <LookCollage items={outfitItems} />
-
-                <View className="flex-row items-center justify-between px-0.5">
-                  <Text className="text-[10px] font-semibold uppercase tracking-[1.3px] text-black/38 dark:text-white/38">{outfitItems.length} pieces</Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={saved ? "Remove from outfits" : "Add to outfits"}
+                <IconButton
+                  label={disliked ? "Undo not for me" : "Not for me"}
+                  tone={disliked ? "accent" : "muted"}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    toggleDislike(outfit);
+                  }}
+                >
+                  <SymbolView
+                    name={disliked ? "hand.thumbsdown.fill" : "hand.thumbsdown"}
+                    tintColor={disliked ? adaptiveColors.accent : adaptiveColors.secondaryLabel}
+                    style={{ width: 14, height: 14 }}
+                  />
+                </IconButton>
+                {!disliked && (
+                  <IconButton
+                    label={saved ? "Added to wardrobe" : "Add to wardrobe"}
+                    tone={saved ? "accent" : "muted"}
                     onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      Haptics.notificationAsync(saved ? Haptics.NotificationFeedbackType.Warning : Haptics.NotificationFeedbackType.Success);
                       toggleSavedLook(outfit.id, outfit);
+                      if (!saved) setAddedMessage("Added to wardrobe");
                     }}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 5,
-                      paddingHorizontal: 12,
-                      paddingVertical: 7,
-                      borderRadius: 999,
-                      backgroundColor: saved ? adaptiveColors.accentSoft : adaptiveColors.label,
-                    }}
-                    className="active:scale-[0.96]"
                   >
-                    <WardrobeIcon name={saved ? "checkmark" : "plus"} color={saved ? adaptiveColors.accent : adaptiveColors.onAccent} size={12} />
-                    <Text style={{ fontSize: 11, lineHeight: 15, fontWeight: "700", color: saved ? adaptiveColors.accent : adaptiveColors.onAccent }}>
-                      {saved ? "Added to outfits" : "Add to outfits"}
-                    </Text>
-                  </Pressable>
-                </View>
-              </Card>
-            </Pressable>
+                    <SymbolView
+                      name={saved ? "checkmark" : "plus"}
+                      tintColor={saved ? adaptiveColors.accent : adaptiveColors.secondaryLabel}
+                      style={{ width: 14, height: 14 }}
+                    />
+                  </IconButton>
+                )}
+              </View>
+            </Tap>
           );
         })}
       </View>
-
     </Screen>
   );
 }
 
+function greeting(hour: number) {
+  if (hour < 5) return "Good evening";
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
 function HomeHeader() {
+  const { weather } = useWeather();
+  const { user } = useAuth();
+  const name = firstName(displayName(user?.user_metadata?.full_name as string | undefined, user?.email));
+  const weatherLine = weather ? `${Math.round(weather.tempC)}° · ${weather.condition}` : null;
+  const subtitle = [`${greeting(new Date().getHours())}${name ? `, ${name}` : ""}`, weatherLine].filter(Boolean).join(" · ");
+  return <PageHeader eyebrow="Daily styling" title="Today" subtitle={subtitle} />;
+}
+
+function AskPill() {
   return (
-      <View className="gap-5">
-      <View className="flex-row items-end justify-between gap-5">
-        <View className="flex-1 gap-1.5">
-          <Text className="text-xs font-bold uppercase tracking-[1.8px] text-black/35 dark:text-white/35">Today</Text>
-          <Text className="text-[24px] font-bold leading-[28px] tracking-[-0.7px] text-black dark:text-[#FFF9ED]">Good afternoon, Preyanshu</Text>
-        </View>
-        <View className="items-end pb-1">
-          <Text className="text-sm font-bold text-black dark:text-[#FFF9ED]">31°</Text>
-          <Text className="text-xs font-medium text-black/35 dark:text-white/35">Clear</Text>
-        </View>
+    <Tap
+      accessibilityRole="button"
+      accessibilityLabel="Ask Alta what to wear"
+      onPress={() => router.push("/chat")}
+      style={{
+        minHeight: 52,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+        paddingLeft: 16,
+        paddingRight: 8,
+        borderRadius: 999,
+        backgroundColor: adaptiveColors.surfaceRaised,
+        borderWidth: 1,
+        borderColor: adaptiveColors.border,
+      }}
+    >
+      <SymbolView name="sparkles" tintColor={adaptiveColors.accent} style={{ width: 16, height: 16 }} />
+      <Text style={{ flex: 1, fontSize: 15, color: adaptiveColors.tertiaryLabel }}>Ask Alta what to wear</Text>
+      <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: adaptiveColors.label }}>
+        <SymbolView name="arrow.up" tintColor={adaptiveColors.onAccent} style={{ width: 14, height: 14 }} />
       </View>
-    </View>
+    </Tap>
   );
 }
 
-function AskCard() {
+function IconButton({ label, onPress, disabled, tone = "muted", children }: { label: string; onPress?: () => void; disabled?: boolean; tone?: "muted" | "accent"; children: ReactNode }) {
   return (
-    <View className="flex-row items-center gap-2.5">
-      <Pressable
-        onPress={() => router.push("/chat")}
-        className="flex-1 min-h-12 flex-row items-center gap-2.5 overflow-hidden rounded-full bg-black/[0.04] px-4 active:scale-[0.96]"
-      >
-        <GlassLayer />
-        <WardrobeIcon name="sparkles" color={adaptiveColors.secondaryLabel} size={17} />
-        <Text className="flex-1 text-xs font-semibold text-black/55 dark:text-white/55">Ask Alta what to wear tonight</Text>
-        <View className="h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-black">
-          <WardrobeIcon name="arrow.right" color={adaptiveColors.onAccent} size={15} />
-        </View>
-      </Pressable>
-      <GlassButton icon="camera" label="Scan clothes" onPress={() => router.push("/scan")} size={44} />
-      <GlassButton icon="plus" label="Build outfit" onPress={() => router.push("/builder")} size={44} variant="dark" />
-    </View>
+    <Tap
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={6}
+      style={{ width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", backgroundColor: tone === "accent" ? adaptiveColors.accentSoft : adaptiveColors.surfaceMuted }}
+    >
+      {children}
+    </Tap>
   );
 }
 
-function LookCollage({ items }: { items: Item[] }) {
+/** One even row of square thumbnails; far shorter than the old 2x2 collage. */
+function LookStrip({ items }: { items: Item[] }) {
   const previews = items.slice(0, 4);
   return (
-    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>
+    <View style={{ flexDirection: "row", gap: 6 }}>
       {previews.map((item) => (
         <View
           key={item.id}
           style={{
-            width: "48.5%",
-            height: 122,
+            flex: 1,
+            aspectRatio: 1,
             borderRadius: 12,
             overflow: "hidden",
             backgroundColor: adaptiveColors.surfaceMuted,
